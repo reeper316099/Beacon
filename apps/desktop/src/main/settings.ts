@@ -12,6 +12,7 @@ export const SettingsSchema = z.object({
     .default('#7c8cff'),
   /** Transparent glass window. Linux defaults to a solid surface unless enabled. */
   glass: z.boolean().default(process.platform !== 'linux'),
+  clipboardPaused: z.boolean().default(false),
   launchAtLogin: z.boolean().default(false),
   display: z.enum(['cursor', 'primary']).default('cursor'),
 })

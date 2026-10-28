@@ -1,7 +1,9 @@
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   BrowserWindow,
   Notification,
+  ClipboardItem,
   clipboard,
   shell,
   Menu,
@@ -17,6 +19,8 @@ import {
 import { APP_NAME } from '@beacon/shared'
 import { startApi } from './api'
 import { trayIcon } from './icon'
+import { deleteImages, watchClipboard } from './clipboardWatcher'
+import { ItemHotkeys } from './itemHotkeys'
 import { settingsFile, SettingsSchema, type Settings } from './settings'
 
 const bootAt = performance.now()
@@ -35,6 +39,7 @@ const dataDir = process.env['BEACON_DATA_DIR'] || app.getPath('userData')
 let win: BrowserWindow | null = null
 let settingsWin: BrowserWindow | null = null
 let tray: Tray | null = null
+let itemHotkeys: ItemHotkeys | null = null
 let worker: UtilityProcess | null = null
 let settings: Settings = SettingsSchema.parse({})
 const store = settingsFile(dataDir)
@@ -53,7 +58,8 @@ let lastHotkeyAt = 0
 function handleEffect(kind: string, payload: unknown, rid: number): void {
   switch (kind) {
     case 'copy':
-      if (typeof payload === 'string' && payload.length < 1_000_000) clipboard.writeText(payload)
+      if (typeof payload === 'string' && payload.length < 1_000_000)
+        void clipboard.writeText(payload).catch(() => {})
       break
     case 'openUrl':
       try {
@@ -69,8 +75,45 @@ function handleEffect(kind: string, payload: unknown, rid: number): void {
         new Notification({ title: String(p.title ?? ''), body: String(p.body ?? '') }).show()
       break
     }
+    case 'copyImage': {
+      const h = String(payload)
+      if (/^[0-9a-f]{16}$/.test(h))
+        void readFile(join(dataDir, 'data/clipboard/images', `${h}.png`))
+          .then((b) =>
+            clipboard.write([
+              new ClipboardItem({
+                'image/png': new Blob([new Uint8Array(b)], { type: 'image/png' }),
+              }),
+            ]),
+          )
+          .catch(() => {})
+      break
+    }
+    case 'deleteImages':
+      if (Array.isArray(payload))
+        void deleteImages(join(dataDir, 'data/clipboard/images'), payload.map(String))
+      break
+    case 'bindHotkey': {
+      const p = payload as {
+        accelerator: string
+        providerId: string
+        itemId: string
+        title: string
+      }
+      void itemHotkeys?.bind(p.accelerator, p.providerId, p.itemId, p.title).then((err) => {
+        if (Notification.isSupported())
+          new Notification({
+            title: err ? 'Hotkey not set' : 'Hotkey set',
+            body: err ?? `${p.accelerator} → ${p.title}`,
+          }).show()
+      })
+      break
+    }
     case 'readClipboard':
-      worker?.postMessage({ type: 'effect-result', rid, value: clipboard.readText() })
+      void clipboard
+        .readText()
+        .catch(() => '')
+        .then((value) => worker?.postMessage({ type: 'effect-result', rid, value }))
       break
   }
 }
@@ -280,21 +323,43 @@ if (!app.requestSingleInstanceLock()) {
         if (m?.type === 'indexed') perf.workerIndexed = { apps: m.apps ?? 0, ms: m.ms ?? 0 }
       },
     )
-    worker.postMessage({ type: 'init', dataDir })
+    worker.postMessage({ type: 'init', dataDir, clipboardPaused: settings.clipboardPaused })
 
     win = createWindow()
     registerHotkey()
+    itemHotkeys = new ItemHotkeys(
+      dataDir,
+      (providerId, itemId) => worker?.postMessage({ type: 'activate-direct', providerId, itemId }),
+      () => settings.hotkey,
+    )
+    await itemHotkeys.load()
+    watchClipboard(
+      join(dataDir, 'data/clipboard/images'),
+      (m) => worker?.postMessage(m),
+      () => settings.clipboardPaused,
+    )
 
     tray = new Tray(trayIcon())
     tray.setToolTip(APP_NAME)
-    tray.setContextMenu(
+    const buildTray = () =>
       Menu.buildFromTemplate([
         { label: `Show ${APP_NAME}`, click: showLauncher },
+        {
+          label: 'Pause clipboard history',
+          type: 'checkbox',
+          checked: settings.clipboardPaused,
+          click: (item) => {
+            settings = { ...settings, clipboardPaused: item.checked }
+            void store.set(settings)
+            worker?.postMessage({ type: 'clip-pause', paused: item.checked })
+            broadcastSettings()
+          },
+        },
         { label: 'Settings…', click: openSettings },
         { type: 'separator' },
         { label: 'Quit', click: () => app.quit() },
-      ]),
-    )
+      ])
+    tray.setContextMenu(buildTray())
 
     await startApi(dataDir, {
       toggle: toggleLauncher,

@@ -227,6 +227,8 @@ describe('provider integration', () => {
     openUrl: async (u) => void copied.push('open:' + u),
     notify: async () => {},
     readClipboard: async () => '{"a":1}',
+    copyImage: async () => {},
+    bindHotkey: async () => {},
   }
   const ctx: ProviderContext = { now: () => now.getTime(), effects }
   const engine = new SearchEngine({ ctx })

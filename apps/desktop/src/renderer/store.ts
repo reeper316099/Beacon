@@ -19,6 +19,9 @@ interface State {
   actionIndex: number
   confirm: { title: string; actionId?: string; index: number } | null
   askConfirm(c: State['confirm']): void
+  toast: string | null
+  pin(): void
+  forget(): void
   settings: BeaconSettings | null
   searching: boolean
   error: string | null
@@ -29,6 +32,13 @@ interface State {
   moveAction(delta: number): void
   activate(actionId?: string, index?: number): void
   reset(): void
+}
+
+let toastTimer: ReturnType<typeof setTimeout> | undefined
+function flash(msg: string): void {
+  useStore.setState({ toast: msg })
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => useStore.setState({ toast: null }), 1800)
 }
 
 function post(m: ClientMessage): void {
@@ -43,6 +53,7 @@ export const useStore = create<State>((set, get) => ({
   actionsOpen: false,
   actionIndex: 0,
   confirm: null,
+  toast: null,
   askConfirm: (c) => set({ confirm: c }),
   settings: null,
   searching: false,
@@ -84,6 +95,25 @@ export const useStore = create<State>((set, get) => ({
       ...(item.frecencyKey ? { frecencyKey: item.frecencyKey } : {}),
     })
   },
+  pin() {
+    const it = get().items[get().selected]
+    if (it) post({ type: 'pin', id: ++qid, item: it })
+  },
+  forget() {
+    const s = get()
+    const it = s.items[s.selected]
+    if (!it) return
+    post({
+      type: 'forget',
+      id: ++qid,
+      providerId: it.providerId,
+      itemId: it.id,
+      ...(it.frecencyKey ? { frecencyKey: it.frecencyKey } : {}),
+    })
+    list.items = list.items.filter((x) => x !== it)
+    set({ items: list.items, selected: Math.min(s.selected, Math.max(0, list.items.length - 1)) })
+    flash('Removed from history')
+  },
   reset() {
     get().setQuery('')
   },
@@ -97,6 +127,8 @@ function onMessage(m: ServerMessage): void {
     if (!reported && m.items.length) reported = true // reported from App's layout effect
   } else if (m.type === 'done' && m.id === activeQuery) {
     useStore.setState({ searching: false })
+  } else if (m.type === 'pinned') {
+    flash(m.pinned ? 'Pinned' : 'Unpinned (or not pinnable)')
   } else if (m.type === 'activated') {
     if (m.ok) {
       window.beacon.hide()

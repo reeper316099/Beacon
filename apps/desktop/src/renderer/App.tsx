@@ -119,11 +119,13 @@ export function App() {
       else if (e.key === 'Escape' || e.key === 'Tab') go(() => s.toggleActions(false))
       return
     }
-    if (e.key === 'ArrowDown' || (ctrl && e.key === 'n')) go(() => s.move(1))
-    else if (e.key === 'ArrowUp' || (ctrl && e.key === 'p')) go(() => s.move(-1))
+    if (e.key === 'ArrowDown') go(() => s.move(1))
+    else if (e.key === 'ArrowUp') go(() => s.move(-1))
     else if (e.key === 'Enter') go(() => run())
     else if ((e.key === 'Tab' && !e.shiftKey) || (ctrl && e.key === 'k'))
       go(() => item && s.toggleActions(true))
+    else if (ctrl && e.key === 'p') go(() => s.pin())
+    else if (ctrl && e.key === 'Backspace') go(() => s.forget())
     else if (ctrl && e.key === ',') go(() => window.beacon.openSettings())
     else if (ctrl && /^[1-9]$/.test(e.key)) go(() => run(undefined, Number(e.key) - 1))
     else if (e.key === 'Escape') {
@@ -234,12 +236,21 @@ export function App() {
           </div>
         )}
 
+        {s.toast && (
+          <div className="toast" role="status">
+            {s.toast}
+          </div>
+        )}
+
         <footer className="footer">
           <span>
             <kbd>↵</kbd> Open
           </span>
           <span>
             <kbd>Tab</kbd> Actions
+          </span>
+          <span>
+            <kbd>{navigator.platform.startsWith('Mac') ? '⌘' : 'Ctrl'}P</kbd> Pin
           </span>
           <span>
             <kbd>Esc</kbd> {s.query ? 'Clear' : 'Close'}

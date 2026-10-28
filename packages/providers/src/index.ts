@@ -11,6 +11,10 @@ import { TimerStore, formatRemaining, parseDuration, type TimerRec } from './tim
 import type { Action } from '@beacon/shared'
 
 export * from './base'
+export * from './clipboard'
+export * from './snippets'
+export * from './notes'
+export * from './personal'
 export * from './calc'
 export * from './devutils'
 export * from './color'

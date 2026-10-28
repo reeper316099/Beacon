@@ -5,6 +5,8 @@ import type { SearchEngine } from './engine'
 export type ClientMessage =
   | { type: 'query'; id: number; text: string }
   | { type: 'cancel'; id: number }
+  | { type: 'pin'; id: number; item: ResultItem }
+  | { type: 'forget'; id: number; providerId: string; itemId: string; frecencyKey?: string }
   | {
       type: 'activate'
       id: number
@@ -21,6 +23,8 @@ export type ServerMessage =
   | { type: 'batch'; id: number; providerId: string; items: ResultItem[]; error?: string }
   | { type: 'done'; id: number }
   | { type: 'activated'; id: number; ok: boolean; error?: string }
+  | { type: 'pinned'; id: number; pinned: boolean }
+  | { type: 'forgotten'; id: number }
 
 /** Minimal MessagePort shape shared by Electron renderer ports and node:worker_threads. */
 export interface PortLike {
@@ -32,12 +36,30 @@ export interface PortLike {
  * Attach the search service to a port. A new query for the same port cancels the
  * previous one (cancel-on-next-keystroke). Returns a detach function.
  */
-export function attachSearchService(port: PortLike, engine: SearchEngine): () => void {
+export interface ServiceHooks {
+  /** Toggle a pin; resolves to the new pinned state. */
+  pin?(item: ResultItem): Promise<boolean>
+}
+
+export function attachSearchService(
+  port: PortLike,
+  engine: SearchEngine,
+  hooks: ServiceHooks = {},
+): () => void {
   const running = new Map<number, AbortController>()
   port.onmessage = (e) => {
     const msg = e.data as ClientMessage
     if (!msg || typeof msg !== 'object') return
-    if (msg.type === 'activate') {
+    if (msg.type === 'pin') {
+      void (hooks.pin?.(msg.item) ?? Promise.resolve(false)).then((pinned) =>
+        port.postMessage({ type: 'pinned', id: msg.id, pinned } satisfies ServerMessage),
+      )
+    } else if (msg.type === 'forget') {
+      engine.opts.frecency?.forget(msg.frecencyKey ?? msg.itemId)
+      void Promise.resolve(engine.get(msg.providerId)?.forget?.(msg.itemId)).finally(() =>
+        port.postMessage({ type: 'forgotten', id: msg.id } satisfies ServerMessage),
+      )
+    } else if (msg.type === 'activate') {
       const p = engine.get(msg.providerId)
       const reply = (ok: boolean, error?: string) =>
         port.postMessage({ type: 'activated', id: msg.id, ok, ...(error ? { error } : {}) })

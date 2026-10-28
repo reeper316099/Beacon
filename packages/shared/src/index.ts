@@ -71,6 +71,10 @@ export interface Effects {
   openUrl(url: string): Promise<void>
   notify(title: string, body?: string): Promise<void>
   readClipboard(): Promise<string>
+  /** Put a stored clipboard image (by content hash) back on the clipboard. */
+  copyImage(hash: string): Promise<void>
+  /** Register a global hotkey that activates an item. */
+  bindHotkey(accelerator: string, providerId: string, itemId: string, title: string): Promise<void>
 }
 
 export interface ProviderContext {
@@ -96,5 +100,7 @@ export interface Provider {
   actions?(item: ResultItem, ctx: ProviderContext): Action[]
   /** Execute an item's action in the process that owns the provider. Omit `actionId` for primary. */
   activate?(itemId: string, actionId: string | undefined, ctx: ProviderContext): Promise<void>
+  /** Remove an item from this provider's own history (e.g. clipboard entry). */
+  forget?(itemId: string): Promise<void> | void
   refresh?(): Promise<void>
 }

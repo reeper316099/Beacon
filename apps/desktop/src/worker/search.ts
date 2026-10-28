@@ -4,7 +4,20 @@ import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
+  AliasProvider,
+  BindProvider,
   CalculatorProvider,
+  ClipboardProvider,
+  ClipboardStore,
+  NotesProvider,
+  PinStore,
+  PinsProvider,
+  SnippetProvider,
+  TodoProvider,
+  type AliasMap,
+  type Note,
+  type Snippet,
+  type Todo,
   ColorProvider,
   DEFAULT_QUICKLINKS,
   DevProvider,
@@ -36,6 +49,7 @@ import type { Effects, ParsedQuery, Provider, ResultItem } from '@beacon/shared'
 const parentPort = (process as unknown as { parentPort: Electron.ParentPort }).parentPort
 
 // Side effects (clipboard, browser, notifications) are performed by the main process.
+let clip: ClipboardStore | undefined
 let rid = 0
 const waiting = new Map<number, (v: string) => void>()
 function effect(kind: string, payload: unknown, wantReply = false): Promise<string> {
@@ -48,6 +62,9 @@ const effects: Effects = {
   openUrl: async (url) => void (await effect('openUrl', url)),
   notify: async (title, body) => void (await effect('notify', { title, body })),
   readClipboard: () => effect('readClipboard', null, true),
+  copyImage: async (hash) => void (await effect('copyImage', hash)),
+  bindHotkey: async (accelerator, providerId, itemId, title) =>
+    void (await effect('bindHotkey', { accelerator, providerId, itemId, title })),
 }
 
 const quicklinkSchema = z.array(
@@ -56,6 +73,33 @@ const quicklinkSchema = z.array(
 const timersSchema = z.array(
   z.object({ id: z.string(), label: z.string(), endsAt: z.number(), startedAt: z.number() }),
 )
+const snippetsSchema = z.array(
+  z.object({
+    id: z.string(),
+    title: z.string(),
+    body: z.string(),
+    tags: z.array(z.string()),
+    folder: z.string(),
+  }),
+)
+const notesSchema = z.array(z.object({ id: z.string(), text: z.string(), ts: z.number() }))
+const todosSchema = z.array(
+  z.object({
+    id: z.string(),
+    text: z.string(),
+    done: z.boolean(),
+    due: z.string().optional(),
+    ts: z.number(),
+  }),
+)
+const pinsSchema = z.array(z.any())
+const aliasSchema = z.record(z.any())
+const clipConfigSchema = z.object({
+  retentionDays: z.number().positive().default(7),
+  maxItems: z.number().int().positive().default(500),
+  /** Regexes (strings); copies matching any are never stored. */
+  ignore: z.array(z.string()).default([]),
+})
 const ratesSchema = z.record(z.number().positive())
 
 const frecencySchema = z.record(z.record(z.object({ v: z.number(), ts: z.number() })))
@@ -104,7 +148,7 @@ class RecentsProvider implements Provider {
   }
 }
 
-async function main(dataDir: string): Promise<void> {
+async function main(dataDir: string, clipPaused: boolean): Promise<void> {
   const store = new JsonFile<FrecencyData>({
     path: join(dataDir, 'data/frecency/frecency.json'),
     schema: frecencySchema,
@@ -143,8 +187,57 @@ async function main(dataDir: string): Promise<void> {
 
   const apps = new AppsProvider()
   engine.register(apps)
+
+  const file = <T>(path: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>, defaults: () => T) =>
+    new JsonFile<T>({ path: join(dataDir, path), schema, defaults })
+  const snippets = file<Snippet[]>('data/snippets/snippets.json', snippetsSchema, () => [])
+  const notes = file<Note[]>('data/notes/notes.json', notesSchema, () => [])
+  const todos = file<Todo[]>('data/todos/todos.json', todosSchema, () => [])
+  const pinFile = file<ResultItem[]>('data/pins.json', pinsSchema, () => [])
+  const aliasFile = file<AliasMap>('config/aliases.json', aliasSchema, () => ({}))
+  const clipCfg = await file('config/clipboard.json', clipConfigSchema, () =>
+    clipConfigSchema.parse({}),
+  ).load()
+  await Promise.all([snippets, notes, todos, pinFile, aliasFile].map((f) => f.load()))
+
+  const compileIgnore = (pats: string[]) =>
+    pats.flatMap((p) => {
+      try {
+        return [new RegExp(p)]
+      } catch {
+        return []
+      }
+    })
+  clip = new ClipboardStore({
+    path: join(dataDir, 'data/clipboard/history.jsonl'),
+    retentionMs: clipCfg.retentionDays * 86_400_000,
+    maxItems: clipCfg.maxItems,
+    ignore: compileIgnore(clipCfg.ignore),
+  })
+  clip.paused = clipPaused
+  await clip.load()
+  setInterval(() => clip?.prune(), 3_600_000).unref()
+  const pins = new PinStore(pinFile)
   engine.register(new RecentsProvider(apps, frecency))
+  // Resolve free text to its best result (used by `alias` / `hotkey` commands).
+  const resolve = async (text: string): Promise<ResultItem | undefined> => {
+    const skip = new Set(['recents', 'pins', 'aliases', 'alias', 'hotkey', 'todos'])
+    let best: ResultItem | undefined
+    await engine.search(text, (b) => {
+      for (const i of b.items)
+        if (!skip.has(i.providerId) && (!best || i.score > best.score)) best = i
+    })
+    return best
+  }
   for (const p of [
+    new PinsProvider(pins),
+    new AliasProvider(aliasFile),
+    new BindProvider('alias', 'Aliases', aliasFile, resolve),
+    new BindProvider('hotkey', 'Hotkeys', aliasFile, resolve),
+    new ClipboardProvider(clip, (hashes) => void effect('deleteImages', hashes)),
+    new SnippetProvider(snippets),
+    new NotesProvider(notes),
+    new TodoProvider(todos),
     new CalculatorProvider(() => rates),
     new ColorProvider(),
     new DevProvider(),
@@ -199,7 +292,29 @@ async function main(dataDir: string): Promise<void> {
 
   let detach: (() => void) | undefined
   parentPort.on('message', (e) => {
-    const m = e.data as { type?: string; rid?: number; value?: string }
+    const m = e.data as {
+      type?: string
+      rid?: number
+      value?: string
+      text?: string
+      hash?: string
+      bytes?: number
+      concealed?: boolean
+      paused?: boolean
+      providerId?: string
+      itemId?: string
+    }
+    if (m?.type === 'clip-text' && typeof m.text === 'string')
+      clip?.addText(m.text, { concealed: !!m.concealed })
+    else if (m?.type === 'clip-image' && m.hash)
+      clip?.addImage(m.hash, m.bytes ?? 0, { concealed: !!m.concealed })
+    else if (m?.type === 'clip-pause' && clip) clip.paused = !!m.paused
+    else if (m?.type === 'activate-direct' && m.providerId && m.itemId) {
+      void engine
+        .get(m.providerId)
+        ?.activate?.(m.itemId, undefined, engine.ctx())
+        .catch(() => {})
+    }
     if (m?.type === 'effect-result' && m.rid) {
       waiting.get(m.rid)?.(m.value ?? '')
       waiting.delete(m.rid)
@@ -214,13 +329,13 @@ async function main(dataDir: string): Promise<void> {
       }
       port.on('message', (ev) => like.onmessage?.({ data: ev.data }))
       port.start()
-      detach = attachSearchService(like, engine)
+      detach = attachSearchService(like, engine, { pin: (i) => pins.toggle(i) })
     }
   })
   parentPort.postMessage({ type: 'ready' })
 }
 
 parentPort.once('message', (e) => {
-  const m = e.data as { type: string; dataDir: string }
-  if (m.type === 'init') void main(m.dataDir)
+  const m = e.data as { type: string; dataDir: string; clipboardPaused?: boolean }
+  if (m.type === 'init') void main(m.dataDir, !!m.clipboardPaused)
 })
