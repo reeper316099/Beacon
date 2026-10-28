@@ -64,6 +64,29 @@ export function attachSearchService(
   hooks: ServiceHooks = {},
 ): () => void {
   const running = new Map<number, AbortController>()
+  let last: { id: number; text: string } | undefined
+  const runQuery = (id: number, text: string): void => {
+    last = { id, text }
+    for (const c of running.values()) c.abort()
+    running.clear()
+    const ctl = new AbortController()
+    running.set(id, ctl)
+    void engine
+      .search(
+        text,
+        (b) => {
+          const out: ServerMessage = { type: 'batch', id, providerId: b.providerId, items: b.items }
+          if (b.error !== undefined) out.error = b.error
+          port.postMessage(out)
+        },
+        ctl.signal,
+      )
+      .finally(() => {
+        if (!ctl.signal.aborted) port.postMessage({ type: 'done', id } satisfies ServerMessage)
+        // A re-run reuses the id: only clear our own entry, never the newer run's.
+        if (running.get(id) === ctl) running.delete(id)
+      })
+  }
   port.onmessage = (e) => {
     const msg = e.data as ClientMessage
     if (!msg || typeof msg !== 'object') return
@@ -98,33 +121,16 @@ export function attachSearchService(
       running.get(msg.id)?.abort()
       running.delete(msg.id)
     } else if (msg.type === 'query' && typeof msg.text === 'string') {
-      for (const c of running.values()) c.abort()
-      running.clear()
-      const ctl = new AbortController()
-      running.set(msg.id, ctl)
-      void engine
-        .search(
-          msg.text,
-          (b) => {
-            const out: ServerMessage = {
-              type: 'batch',
-              id: msg.id,
-              providerId: b.providerId,
-              items: b.items,
-            }
-            if (b.error !== undefined) out.error = b.error
-            port.postMessage(out)
-          },
-          ctl.signal,
-        )
-        .finally(() => {
-          if (!ctl.signal.aborted)
-            port.postMessage({ type: 'done', id: msg.id } satisfies ServerMessage)
-          running.delete(msg.id)
-        })
+      runQuery(msg.id, msg.text)
     }
   }
+  // The index (or another provider's data) changed under a query that already ran: run it again
+  // under the same id so the late results stream in like any slow provider's would.
+  const unsubscribe = engine.onInvalidate(() => {
+    if (last) runQuery(last.id, last.text)
+  })
   return () => {
+    unsubscribe()
     for (const c of running.values()) c.abort()
     port.onmessage = null
   }

@@ -656,6 +656,7 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
       : discoverApps(plat, { convertPlist, getStartApps })
   ).then(async (list) => {
     apps.setAll(list)
+    engine.invalidate() // a query typed before the index was ready shows its results now
     parentPort.postMessage({
       type: 'indexed',
       apps: list.length,

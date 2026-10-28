@@ -265,4 +265,39 @@ describe('NameIndexProvider + port protocol', () => {
     const batch = msgs.find((m) => m.type === 'batch' && m.id === 2)
     expect(batch && batch.type === 'batch' && batch.items[0]?.title).toBe('Firefox')
   })
+
+  it('re-runs the latest query under the same id when the engine is invalidated', async () => {
+    const p = new NameIndexProvider('apps', 'Apps')
+    const engine = new SearchEngine()
+    engine.register(p)
+    const { port1, port2 } = new MessageChannel()
+    const detach = attachSearchService(port2 as never, engine)
+    const batches: { id: number; titles: string[] }[] = []
+    let dones = 0
+    let wake: () => void = () => {}
+    port1.onmessage = (e) => {
+      const m = e.data as ServerMessage
+      if (m.type === 'batch') batches.push({ id: m.id, titles: m.items.map((i) => i.title) })
+      if (m.type === 'done') {
+        dones++
+        wake()
+      }
+    }
+    const nextDone = (n: number) =>
+      new Promise<void>((res) => {
+        wake = () => dones >= n && res()
+        wake()
+      })
+    port1.postMessage({ type: 'query', id: 7, text: 'fire' })
+    await nextDone(1) // index not built yet: nothing found
+    expect(batches.flatMap((b) => b.titles)).toEqual([])
+    p.set([{ id: 'ff', title: 'Firefox', kind: 'app', primary: act }])
+    engine.invalidate()
+    await nextDone(2)
+    expect(batches.filter((b) => b.titles.includes('Firefox')).map((b) => b.id)).toEqual([7])
+    detach()
+    engine.invalidate() // detached: no further work, no throw
+    port1.close()
+    port2.close()
+  })
 })

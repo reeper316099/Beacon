@@ -118,7 +118,7 @@ export async function launchBeacon(
     }
     throw new Error('api.json never appeared')
   }
-  return {
+  const beacon: Beacon = {
     app,
     dataDir,
     cacheDir,
@@ -153,6 +153,16 @@ export async function launchBeacon(
       if (base) await rm(base, { recursive: true, force: true })
     },
   }
+  // Slow CI machines finish indexing apps seconds after the window exists. Wait for it, so a
+  // platform where it never completes fails here with the status payload instead of as "No results".
+  let status: any = null
+  for (let i = 0; i < 300; i++) {
+    status = await beacon.api('status', 'GET').catch(() => null)
+    if (status?.perf?.worker) return beacon
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  await beacon.close()
+  throw new Error(`apps index did not complete within 30 s; status: ${JSON.stringify(status)}`)
 }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

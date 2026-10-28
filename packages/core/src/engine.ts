@@ -25,6 +25,7 @@ export interface Batch {
 
 export class SearchEngine {
   private providers = new Map<string, Provider>()
+  private invalidators = new Set<() => void>()
   readonly opts: EngineOptions
 
   constructor(opts: EngineOptions = {}) {
@@ -43,6 +44,19 @@ export class SearchEngine {
       mode: p.mode,
       triggers: p.triggers ?? [],
     }))
+  }
+
+  /**
+   * Provider data changed after a query may already have run (e.g. the app index finished building).
+   * Attached clients re-run their latest query; late results merge in below the selection.
+   */
+  invalidate(): void {
+    for (const f of [...this.invalidators]) f()
+  }
+
+  onInvalidate(fn: () => void): () => void {
+    this.invalidators.add(fn)
+    return () => this.invalidators.delete(fn)
   }
 
   unregister(id: string): void {
