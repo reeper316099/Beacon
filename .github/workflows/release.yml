@@ -9,25 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  verify:
-    # Fail fast, before any installer is built, if the tag and the app version disagree
-    # (installer file names come from package.json, not from the tag).
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Tag matches package versions
-        run: |
-          want="${GITHUB_REF_NAME#v}"
-          for f in package.json apps/desktop/package.json; do
-            have=$(node -p "require('./$f').version")
-            if [ "$have" != "$want" ]; then
-              echo "::error::Tag $GITHUB_REF_NAME does not match $f (version $have). Tag v$have, or bump the version in both package.json files first."
-              exit 1
-            fi
-          done
-
   build:
-    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -53,15 +35,19 @@ jobs:
       - name: Package
         # electron-builder finds the homepage (required for .deb/.rpm) from a .git folder next to
         # package.json, which this monorepo layout doesn't have; take it from the repo running the job.
+        # The version of the installers (file names and the app's own version) comes from the tag,
+        # so package.json does not have to be bumped for a release.
         # --publish never: this job only builds; the release job below publishes.
         shell: bash
         run: >
           npx electron-builder ${{ matrix.args }} --publish never
           -c.extraMetadata.homepage="$HOMEPAGE"
+          -c.extraMetadata.version="${VERSION#v}"
         working-directory: apps/desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           HOMEPAGE: ${{ github.server_url }}/${{ github.repository }}
+          VERSION: ${{ github.ref_name }}
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.os }}
@@ -87,8 +73,14 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+        # A release may already exist for the tag (e.g. created in the GitHub UI): then attach to it.
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --title "Beacon $GITHUB_REF_NAME" \
-            --notes-file docs/RELEASE_NOTES.md \
-            --verify-tag
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            gh release edit "$GITHUB_REF_NAME" --title "Beacon $GITHUB_REF_NAME" --notes-file docs/RELEASE_NOTES.md
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --title "Beacon $GITHUB_REF_NAME" \
+              --notes-file docs/RELEASE_NOTES.md \
+              --verify-tag
+          fi
