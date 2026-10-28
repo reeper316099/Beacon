@@ -1,9 +1,10 @@
 import type { NameEntry } from '@beacon/core'
 import { NameIndexProvider } from '@beacon/core'
 import type { AppEntry } from './types'
+import { launch } from './launch'
 import { discoverLinux } from './linux'
-import { discoverMac } from './macos'
-import { discoverWindows } from './windows'
+import { discoverMac, type MacOptions } from './macos'
+import { discoverWindows, type WinOptions } from './windows'
 
 export * from './types'
 export * from './linux'
@@ -15,10 +16,14 @@ export type Platform = 'linux' | 'darwin' | 'win32'
 
 export async function discoverApps(
   platform: Platform = process.platform as Platform,
+  opts: {
+    convertPlist?: MacOptions['convertPlist']
+    getStartApps?: WinOptions['getStartApps']
+  } = {},
 ): Promise<AppEntry[]> {
   if (platform === 'linux') return discoverLinux()
-  if (platform === 'darwin') return discoverMac()
-  return discoverWindows()
+  if (platform === 'darwin') return discoverMac(opts)
+  return discoverWindows(opts)
 }
 
 /**
@@ -31,6 +36,14 @@ export class AppsProvider extends NameIndexProvider {
 
   constructor() {
     super('apps', 'Applications')
+  }
+
+  async activate(itemId: string, actionId?: string): Promise<void> {
+    const e = this.byId.get(itemId)
+    if (!e) throw new Error('unknown app')
+    const spec = actionId ? e.actions.find((a) => a.id === actionId)?.launch : e.launch
+    if (!spec) throw new Error('unknown action')
+    await launch(spec)
   }
 
   setAll(entries: AppEntry[]): void {
@@ -60,6 +73,13 @@ export class AppsProvider extends NameIndexProvider {
           title: e.name,
           kind: 'app',
           keywords: e.keywords,
+          ...(e.iconPath ? { icon: e.iconPath } : {}),
+          actions: e.actions.map((a) => ({
+            id: a.id,
+            title: a.title,
+            kind: 'custom' as const,
+            payload: null,
+          })),
           primary: { id: 'launch', title: 'Open', kind: 'open', payload: e.launch },
         })
       }

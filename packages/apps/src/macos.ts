@@ -55,6 +55,7 @@ async function readInfo(app: string, opts: MacOptions): Promise<Record<string, s
 export async function discoverMac(opts: MacOptions = {}): Promise<AppEntry[]> {
   const out: AppEntry[] = []
   const seen = new Set<string>()
+  const seenBundles = new Set<string>()
   for (const dir of opts.dirs ?? macAppDirs()) {
     let ents
     try {
@@ -69,11 +70,17 @@ export async function discoverMac(opts: MacOptions = {}): Promise<AppEntry[]> {
       seen.add(path)
       const info = await readInfo(path, opts)
       if (info['LSUIElement'] === '1' || info['LSBackgroundOnly'] === '1') continue
+      // The same app can appear under /Applications and a Cryptex path; keep the first.
+      const bundleId = info['CFBundleIdentifier']
+      if (bundleId) {
+        if (seenBundles.has(bundleId)) continue
+        seenBundles.add(bundleId)
+      }
       const name = info['CFBundleDisplayName'] || info['CFBundleName'] || basename(e.name, '.app')
       const entry: AppEntry = {
         id: path,
         name,
-        keywords: info['CFBundleIdentifier'] ? [info['CFBundleIdentifier']] : [],
+        keywords: [],
         launch: { file: 'open', args: [path] },
         iconPath: path,
         source: dir,

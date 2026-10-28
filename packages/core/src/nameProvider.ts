@@ -7,6 +7,8 @@ export interface NameEntry {
   subtitle?: string
   kind: string
   keywords?: string[]
+  icon?: string
+  actions?: Action[]
   primary: Action
 }
 
@@ -40,6 +42,8 @@ export class NameIndexProvider implements Provider {
         primary: item.primary,
       }
       if (item.subtitle !== undefined) r.subtitle = item.subtitle
+      if (item.icon !== undefined) r.icon = item.icon
+      if (item.actions?.length) r.actions = item.actions
       return r
     })
   }

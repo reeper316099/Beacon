@@ -148,6 +148,10 @@ describe('macOS bundles', () => {
       `<?xml version="1.0"?><plist><dict><key>CFBundleDisplayName</key><string>Foo &amp; Co</string><key>CFBundleIdentifier</key><string>com.example.foo</string></dict></plist>`,
     )
     await mk('Agent.app', `<plist><dict><key>LSUIElement</key><string>1</string></dict></plist>`)
+    await mk(
+      'FooCopy.app',
+      `<plist><dict><key>CFBundleIdentifier</key><string>com.example.foo</string></dict></plist>`,
+    )
     await mk('NoPlist.app')
     await writeFile(join(root, 'readme.txt'), 'x')
     const apps = await discoverMac({ dirs: [root, join(tmp, 'missing')] })

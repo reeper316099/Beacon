@@ -8,6 +8,10 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   { languageOptions: { globals: globals.node } },
   {
+    files: ['apps/desktop/src/renderer/**'],
+    rules: { '@typescript-eslint/no-explicit-any': 'off' },
+  },
+  {
     rules: {
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       // Never execute shell strings or dynamic code anywhere in Beacon.

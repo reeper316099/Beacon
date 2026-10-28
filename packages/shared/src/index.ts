@@ -85,5 +85,7 @@ export interface Provider {
     signal: AbortSignal,
   ): AsyncIterable<ResultItem> | Promise<ResultItem[]>
   actions?(item: ResultItem, ctx: ProviderContext): Action[]
+  /** Execute an item's action in the process that owns the provider. Omit `actionId` for primary. */
+  activate?(itemId: string, actionId: string | undefined, ctx: ProviderContext): Promise<void>
   refresh?(): Promise<void>
 }

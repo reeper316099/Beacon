@@ -3,12 +3,24 @@ import type { SearchEngine } from './engine'
 
 /** Messages renderer → search worker. */
 export type ClientMessage =
-  { type: 'query'; id: number; text: string } | { type: 'cancel'; id: number }
+  | { type: 'query'; id: number; text: string }
+  | { type: 'cancel'; id: number }
+  | {
+      type: 'activate'
+      id: number
+      providerId: string
+      itemId: string
+      actionId?: string
+      /** Query text at selection time, for frecency. */
+      query: string
+      frecencyKey?: string
+    }
 
 /** Messages search worker → renderer. */
 export type ServerMessage =
   | { type: 'batch'; id: number; providerId: string; items: ResultItem[]; error?: string }
   | { type: 'done'; id: number }
+  | { type: 'activated'; id: number; ok: boolean; error?: string }
 
 /** Minimal MessagePort shape shared by Electron renderer ports and node:worker_threads. */
 export interface PortLike {
@@ -25,7 +37,19 @@ export function attachSearchService(port: PortLike, engine: SearchEngine): () =>
   port.onmessage = (e) => {
     const msg = e.data as ClientMessage
     if (!msg || typeof msg !== 'object') return
-    if (msg.type === 'cancel') {
+    if (msg.type === 'activate') {
+      const p = engine.get(msg.providerId)
+      const reply = (ok: boolean, error?: string) =>
+        port.postMessage({ type: 'activated', id: msg.id, ok, ...(error ? { error } : {}) })
+      if (!p?.activate) return reply(false, 'unsupported')
+      p.activate(msg.itemId, msg.actionId, engine.ctx()).then(
+        () => {
+          engine.opts.frecency?.record(msg.query, msg.frecencyKey ?? msg.itemId)
+          reply(true)
+        },
+        (e) => reply(false, e instanceof Error ? e.message : String(e)),
+      )
+    } else if (msg.type === 'cancel') {
       running.get(msg.id)?.abort()
       running.delete(msg.id)
     } else if (msg.type === 'query' && typeof msg.text === 'string') {

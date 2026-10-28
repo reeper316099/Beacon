@@ -19,7 +19,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "bench": "tsx packages/core/bench/bench.ts",
-    "guard": "node scripts/guard.mjs"
+    "guard": "node scripts/guard.mjs",
+    "dev": "npm run dev -w @beacon/desktop",
+    "build": "npm run build -w @beacon/desktop"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

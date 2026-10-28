@@ -39,11 +39,15 @@ export class SearchEngine {
     this.providers.delete(id)
   }
 
+  get(id: string): Provider | undefined {
+    return this.providers.get(id)
+  }
+
   triggers(): string[] {
     return [...this.providers.values()].flatMap((p) => p.triggers ?? [])
   }
 
-  private ctx(): ProviderContext {
+  ctx(): ProviderContext {
     return this.opts.ctx ?? { now: Date.now }
   }
 
