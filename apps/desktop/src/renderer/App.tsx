@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { compile, match, prepare } from '@beacon/matcher'
 import type { ResultItem } from '@beacon/shared'
+import { stripSgr } from './ansi'
+import { ScriptPanel } from './ScriptPanel'
 import { markCommitted, useStore } from './store'
 import { applyTheme } from './theme'
 
@@ -21,13 +23,19 @@ function Icon({ item }: { item: ResultItem }) {
   )
   useEffect(() => {
     const p = item.icon
-    if (!p || p.startsWith('color:')) return
+    if (!p || p.startsWith('color:') || (p.length <= 8 && !/[\\/.:]/.test(p))) return
     if (iconCache.has(p)) return setSrc(iconCache.get(p) ?? null)
     void window.beacon.getIcon(p).then((u) => {
       iconCache.set(p, u)
       setSrc(u)
     })
   }, [item.icon])
+  if (item.icon && item.icon.length <= 8 && !/[\\/.:]/.test(item.icon))
+    return (
+      <span className="icon emoji" aria-hidden>
+        {item.icon}
+      </span>
+    )
   if (item.icon?.startsWith('color:'))
     return <span className="icon swatch" style={{ background: item.icon.slice(6) }} aria-hidden />
   if (src) return <img className="icon" src={src} alt="" draggable={false} />
@@ -94,6 +102,18 @@ export function App() {
     const act = actionId
       ? [it.primary, ...(it.actions ?? [])].find((a) => a.id === actionId)
       : it.primary
+    const p = (act?.payload ?? {}) as { setQuery?: string; script?: boolean }
+    if (act?.id === 'set-query' && p.setQuery !== undefined) return s.setQuery(p.setQuery)
+    // Scripts stream into the output panel instead of running headlessly.
+    if (act?.id === 'run-script' && p.script) {
+      if (act.confirm)
+        return s.askConfirm({
+          title: act.title,
+          index: index ?? s.selected,
+          ...(actionId ? { actionId } : {}),
+        })
+      return s.startScript(it, act.payload as Record<string, unknown>)
+    }
     if (act?.confirm)
       s.askConfirm({
         title: act.title,
@@ -108,12 +128,28 @@ export function App() {
       e.preventDefault()
       fn()
     }
+    const ctrl = e.ctrlKey || e.metaKey
+    if (s.script) {
+      const sc = s.script
+      if (sc.status === 'confirm') {
+        if (e.key === 'Enter') go(() => s.confirmScript())
+        else if (e.key === 'Escape') go(() => s.closeScript())
+      } else if (sc.status === 'need-args') {
+        if (e.key === 'Escape') go(() => s.closeScript())
+      } else if (sc.status === 'running') {
+        if (e.key === 'Escape' || (ctrl && e.key === 'c' && !window.getSelection()?.toString()))
+          go(() => s.cancelScript())
+      } else if (e.key === 'Escape') go(() => s.closeScript())
+      else if (ctrl && e.key === 'r') go(() => s.rerunScript())
+      else if (ctrl && e.shiftKey && e.key.toLowerCase() === 'c')
+        go(() => void navigator.clipboard.writeText(stripSgr(sc.lines.map((l) => l.text).join(''))))
+      return
+    }
     if (s.confirm) {
       if (e.key === 'Enter') go(() => s.activate(s.confirm?.actionId, s.confirm?.index))
       else if (e.key === 'Escape') go(() => s.askConfirm(null))
       return
     }
-    const ctrl = e.ctrlKey || e.metaKey
     if (s.actionsOpen) {
       if (e.key === 'ArrowDown') go(() => s.moveAction(1))
       else if (e.key === 'ArrowUp') go(() => s.moveAction(-1))
@@ -158,11 +194,18 @@ export function App() {
             aria-controls="results"
             aria-activedescendant={item ? `r-${s.selected}` : undefined}
             value={s.query}
+            readOnly={!!s.script}
             onChange={(e) => s.setQuery(e.target.value)}
           />
         </div>
 
-        <div className="results" ref={scrollRef} style={{ maxHeight: ROW * VISIBLE }}>
+        {s.script && <ScriptPanel />}
+        <div
+          className="results"
+          hidden={!!s.script}
+          ref={scrollRef}
+          style={{ maxHeight: ROW * VISIBLE }}
+        >
           <div
             id="results"
             role="listbox"
@@ -251,7 +294,7 @@ export function App() {
           </div>
         )}
 
-        <footer className="footer">
+        <footer className="footer" hidden={!!s.script}>
           <span>
             <kbd>↵</kbd> Open
           </span>

@@ -6,15 +6,21 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./files": "./src/files.ts"
+    "./files": "./src/files.ts",
+    "./workflows": "./src/workflows.ts",
+    "./extensions": "./src/extensions/index.ts",
+    "./extensions/sandbox": "./src/extensions/sandbox-entry.ts"
   },
   "dependencies": {
     "@beacon/core": "*",
     "@beacon/jsonstore": "*",
     "@beacon/matcher": "*",
     "@beacon/shared": "*",
+    "@jitl/quickjs-singlefile-cjs-release-sync": "^0.32.0",
     "chokidar": "^5.0.0",
     "mathjs": "^14.0.0",
+    "quickjs-emscripten": "^0.32.0",
+    "quickjs-emscripten-core": "^0.32.0",
     "sql.js": "^1.15.2",
     "yaml": "^2.9.1"
   },

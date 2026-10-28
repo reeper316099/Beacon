@@ -10,6 +10,24 @@ export interface BeaconSettings {
 export interface BeaconApi {
   hide(): void
   rebuildFiles(): void
+  listWorkflows(): Promise<
+    { file: string; raw: string; ok: boolean; error?: string; name?: string; keyword?: string }[]
+  >
+  saveWorkflow(file: string, raw: string): Promise<{ ok: boolean; error?: string }>
+  deleteWorkflow(file: string): Promise<boolean>
+  listExtensions(): Promise<
+    {
+      id: string
+      name: string
+      version: string
+      description?: string
+      permissions: string[]
+      state: string
+      error?: string
+    }[]
+  >
+  extensionAction(op: string, id: string): Promise<boolean>
+  openScriptsFolder(): Promise<string>
   openSettings(): void
   getSettings(): Promise<BeaconSettings>
   setSettings(

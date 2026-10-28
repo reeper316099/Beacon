@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { parseWorkflow } from '@beacon/providers/workflows'
 import { isAbsolute, join } from 'node:path'
 import {
   BrowserWindow,
@@ -17,6 +18,7 @@ import {
   type UtilityProcess,
 } from 'electron'
 import { APP_NAME } from '@beacon/shared'
+import { ExtensionManager } from './extensions'
 import { startApi } from './api'
 import { trayIcon } from './icon'
 import { deleteImages, watchClipboard } from './clipboardWatcher'
@@ -52,6 +54,9 @@ let win: BrowserWindow | null = null
 let settingsWin: BrowserWindow | null = null
 let tray: Tray | null = null
 let itemHotkeys: ItemHotkeys | null = null
+let extManager: ExtensionManager | null = null
+const headlessWaiters = new Map<number, (r: unknown) => void>()
+let headlessSeq = 0
 let worker: UtilityProcess | null = null
 let settings: Settings = SettingsSchema.parse({})
 const store = settingsFile(dataDir)
@@ -138,6 +143,19 @@ function handleEffect(kind: string, payload: unknown, rid: number): void {
             body: err ?? `${p.accelerator} → ${p.title}`,
           }).show()
       })
+      break
+    }
+    case 'ext': {
+      const reply = (r: unknown) =>
+        worker?.postMessage({ type: 'effect-result', rid, value: JSON.stringify(r) })
+      void (
+        extManager
+          ? extManager.handle(payload as never)
+          : Promise.reject(new Error('extensions unavailable'))
+      ).then(
+        (value) => reply({ value: value ?? null }),
+        (e: unknown) => reply({ error: e instanceof Error ? e.message : 'extension error' }),
+      )
       break
     }
     case 'readClipboard':
@@ -301,6 +319,66 @@ const p50 = (a: number[]) =>
 const pct = (a: number[], q: number) =>
   a.length ? [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * q))] : null
 
+/** Tray shows how many scripts are running (they keep running when the launcher hides). */
+function setRunning(n: number): void {
+  tray?.setToolTip(n ? `${APP_NAME}: ${n} script${n > 1 ? 's' : ''} running` : APP_NAME)
+  if (process.platform === 'darwin') tray?.setTitle(n ? ` ${n}` : '')
+}
+
+/** One-shot query over a private MessagePort (used by the CLI). */
+function headlessQuery(text: string): Promise<unknown[]> {
+  return new Promise((resolve) => {
+    if (!worker) return resolve([])
+    const { port1, port2 } = new MessageChannelMain()
+    worker.postMessage({ type: 'aux-port' }, [port1])
+    const out: Record<string, unknown>[] = []
+    const finish = () => {
+      port2.close()
+      resolve(out.sort((a, b) => Number(b['score']) - Number(a['score'])).slice(0, 30))
+    }
+    const timer = setTimeout(finish, 2500)
+    port2.on('message', (e) => {
+      const m = e.data as {
+        type: string
+        items?: Record<string, unknown>[]
+        error?: string
+        providerId?: string
+      }
+      if (m.type === 'batch' && m.error)
+        out.push({
+          title: `provider error: ${m.error}`,
+          subtitle: null,
+          kind: 'error',
+          provider: m.providerId,
+          score: 9999,
+        })
+      if (m.type === 'batch')
+        for (const i of m.items ?? [])
+          out.push({
+            title: i['title'],
+            subtitle: i['subtitle'] ?? null,
+            kind: i['kind'],
+            provider: i['providerId'],
+            score: i['score'],
+          })
+      if (m.type === 'done') {
+        clearTimeout(timer)
+        finish()
+      }
+    })
+    port2.start()
+    port2.postMessage({ type: 'query', id: 1, text })
+  })
+}
+
+function headlessRun(script: string, args: string[]): Promise<unknown> {
+  return new Promise((resolve) => {
+    const rid = ++headlessSeq
+    headlessWaiters.set(rid, resolve)
+    worker?.postMessage({ type: 'headless-run', rid, script, args })
+  })
+}
+
 function status() {
   return {
     app: APP_NAME,
@@ -382,7 +460,15 @@ if (!app.requestSingleInstanceLock()) {
         size?: number
         scanning?: boolean
         scanned?: number
+        n?: number
+        result?: unknown
       }) => {
+        if (m?.type === 'ready') extManager?.publish()
+        if (m?.type === 'scripts-running') setRunning(m.n ?? 0)
+        if (m?.type === 'headless-result') {
+          headlessWaiters.get(m.rid ?? -1)?.(m.result)
+          headlessWaiters.delete(m.rid ?? -1)
+        }
         if (m?.type === 'effect') return void handleEffect(m.kind ?? '', m.payload, m.rid ?? 0)
         if (m?.type === 'files')
           perf.files = { size: m.size ?? 0, scanning: !!m.scanning, scanned: m.scanned ?? 0 }
@@ -432,12 +518,77 @@ if (!app.requestSingleInstanceLock()) {
       ])
     tray.setContextMenu(buildTray())
 
+    extManager = new ExtensionManager(dataDir, (list) =>
+      worker?.postMessage({ type: 'ext-list', list }),
+    )
+    await extManager.init()
+
     await startApi(dataDir, {
       toggle: toggleLauncher,
       show: showLauncher,
       hide: hideLauncher,
       status,
+      query: headlessQuery,
+      run: headlessRun,
+      reload: () => worker?.postMessage({ type: 'reload-all' }),
     })
+
+    // ---- settings: workflows (form + raw editor) and extensions ----
+    const wfDir = join(dataDir, 'workflows')
+    ipcMain.handle('workflows:list', async () => {
+      await mkdir(wfDir, { recursive: true })
+      const out: {
+        file: string
+        raw: string
+        ok: boolean
+        error?: string
+        name?: string
+        keyword?: string
+      }[] = []
+      for (const f of (await readdir(wfDir)).filter((n) => /\.(json|ya?ml)$/i.test(n)).sort()) {
+        const raw = await readFile(join(wfDir, f), 'utf8').catch(() => '')
+        const r = parseWorkflow(raw, f.toLowerCase().endsWith('.json') ? '.json' : '.yaml')
+        out.push(
+          r.ok
+            ? { file: f, raw, ok: true, name: r.workflow.name, keyword: r.workflow.keyword }
+            : { file: f, raw, ok: false, error: r.error },
+        )
+      }
+      return out
+    })
+    ipcMain.handle('workflows:save', async (_e, file: unknown, raw: unknown) => {
+      if (
+        typeof file !== 'string' ||
+        typeof raw !== 'string' ||
+        !/^[A-Za-z0-9][\w.-]{0,60}\.(json|ya?ml)$/.test(file) ||
+        raw.length > 100_000
+      )
+        return { ok: false, error: 'invalid file name or content' }
+      const r = parseWorkflow(raw, file.toLowerCase().endsWith('.json') ? '.json' : '.yaml')
+      if (!r.ok) return { ok: false, error: r.error }
+      await mkdir(wfDir, { recursive: true })
+      await writeFile(join(wfDir, file), raw)
+      worker?.postMessage({ type: 'reload-all' })
+      return { ok: true }
+    })
+    ipcMain.handle('workflows:delete', async (_e, file: unknown) => {
+      if (typeof file !== 'string' || !/^[A-Za-z0-9][\w.-]{0,60}\.(json|ya?ml)$/.test(file))
+        return false
+      await shell.trashItem(join(wfDir, file)).catch(() => rm(join(wfDir, file), { force: true }))
+      worker?.postMessage({ type: 'reload-all' })
+      return true
+    })
+    ipcMain.handle('extensions:list', () => extManager?.list() ?? [])
+    ipcMain.handle('extensions:do', async (_e, op: unknown, id: unknown) => {
+      if (
+        typeof id !== 'string' ||
+        !['enable', 'disable', 'remove', 'reload', 'open-folder'].includes(String(op))
+      )
+        return false
+      await extManager?.handle({ op: 'admin', admin: String(op), id })
+      return true
+    })
+    ipcMain.handle('scripts:open-folder', () => shell.openPath(join(dataDir, 'scripts')))
 
     ipcMain.on('hide', hideLauncher)
     ipcMain.on('files:rebuild', () => worker?.postMessage({ type: 'files-rebuild' }))
@@ -531,7 +682,22 @@ function runSmoke(): void {
       )
       await new Promise((r) => setTimeout(r, 120))
     }
+    // Optional scripted keys (dev/CI): BEACON_KEYS="Enter,Enter" → screenshots BEACON_SHOT-<n>.png after each.
     const shot = process.env['BEACON_SHOT']
+    const keys = (process.env['BEACON_KEYS'] ?? '').split(',').filter(Boolean)
+    for (const [i, k] of keys.entries()) {
+      const [key, ...mods] = k.split('+').reverse()
+      await win?.webContents.executeJavaScript(
+        `document.querySelector('input').dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, ctrlKey: ${mods.includes('Ctrl')}, metaKey: false, bubbles: true }))`,
+      )
+      await new Promise((r) => setTimeout(r, 1200))
+      if (shot && win)
+        (await import('node:fs')).writeFileSync(
+          shot.replace('.png', `-${i + 1}.png`),
+          (await win.webContents.capturePage()).toPNG(),
+        )
+    }
+
     if (shot && win)
       (await import('node:fs')).writeFileSync(shot, (await win.webContents.capturePage()).toPNG())
     console.log(

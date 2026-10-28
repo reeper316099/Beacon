@@ -6,6 +6,16 @@ export type ClientMessage =
   | { type: 'query'; id: number; text: string }
   | { type: 'cancel'; id: number }
   | { type: 'pin'; id: number; item: ResultItem }
+  | {
+      type: 'script-run'
+      runId: string
+      scriptId: string
+      args?: Record<string, string>
+      trustHash?: string
+      confirmed?: boolean
+      selection?: string
+    }
+  | { type: 'script-cancel'; runId: string }
   | { type: 'forget'; id: number; providerId: string; itemId: string; frecencyKey?: string }
   | {
       type: 'activate'
@@ -24,6 +34,7 @@ export type ServerMessage =
   | { type: 'done'; id: number }
   | { type: 'activated'; id: number; ok: boolean; error?: string }
   | { type: 'pinned'; id: number; pinned: boolean }
+  | { type: 'script-event'; runId: string; event: Record<string, unknown> }
   | { type: 'forgotten'; id: number }
 
 /** Minimal MessagePort shape shared by Electron renderer ports and node:worker_threads. */
@@ -39,6 +50,12 @@ export interface PortLike {
 export interface ServiceHooks {
   /** Toggle a pin; resolves to the new pinned state. */
   pin?(item: ResultItem): Promise<boolean>
+  /** Script runs (inline output panel). `post` sends events back to the same port. */
+  scriptRun?(
+    msg: Extract<ClientMessage, { type: 'script-run' }>,
+    post: (event: Record<string, unknown>) => void,
+  ): void
+  scriptCancel?(runId: string): void
 }
 
 export function attachSearchService(
@@ -50,7 +67,13 @@ export function attachSearchService(
   port.onmessage = (e) => {
     const msg = e.data as ClientMessage
     if (!msg || typeof msg !== 'object') return
-    if (msg.type === 'pin') {
+    if (msg.type === 'script-run') {
+      hooks.scriptRun?.(msg, (event) =>
+        port.postMessage({ type: 'script-event', runId: msg.runId, event } satisfies ServerMessage),
+      )
+    } else if (msg.type === 'script-cancel') {
+      hooks.scriptCancel?.(msg.runId)
+    } else if (msg.type === 'pin') {
       void (hooks.pin?.(msg.item) ?? Promise.resolve(false)).then((pinned) =>
         port.postMessage({ type: 'pinned', id: msg.id, pinned } satisfies ServerMessage),
       )

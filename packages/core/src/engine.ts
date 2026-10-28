@@ -84,7 +84,7 @@ export class SearchEngine {
         const local = new AbortController()
         const onAbort = () => local.abort()
         signal.addEventListener('abort', onAbort, { once: true })
-        const timer = setTimeout(() => local.abort(), timeoutMs)
+        const timer = setTimeout(() => local.abort(), p.timeoutMs ?? timeoutMs)
         let items: ResultItem[] = []
         let error: string | undefined
         try {

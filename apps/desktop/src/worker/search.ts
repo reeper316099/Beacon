@@ -3,11 +3,28 @@
 import { execFile, fork, type ChildProcess } from 'node:child_process'
 import { setFlagsFromString } from 'node:v8'
 import { runInNewContext } from 'node:vm'
+import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
   AliasProvider,
+  DEFAULT_SCRIPTS_CONFIG,
+  ExtensionAdminProvider,
+  ExtensionProxyProvider,
+  ScriptManager,
+  ScriptTrust,
+  ScriptsProvider,
+  WorkflowProvider,
+  WorkflowStore,
+  parseSshConfig,
+  scanScripts,
+  watchScripts,
+  type ExtBridge,
+  type ExtInfo,
+  type ScriptEntry,
+  type ScriptsConfig,
+  type TrustFile,
   HubSetupProvider,
   HubSourceProvider,
   cipherkeep,
@@ -67,6 +84,7 @@ import {
 } from '@beacon/apps'
 import { Frecency, SearchEngine, attachSearchService, type FrecencyData } from '@beacon/core'
 import { JsonFile } from '@beacon/jsonstore'
+import chokidar from 'chokidar'
 import type { Effects, ParsedQuery, Provider, ResultItem } from '@beacon/shared'
 
 // utilityProcess ignores --expose-gc, so obtain gc() via V8 flags. Used to hand crawl garbage back
@@ -83,6 +101,10 @@ const parentPort = (process as unknown as { parentPort: Electron.ParentPort }).p
 
 // Side effects (clipboard, browser, notifications) are performed by the main process.
 let clip: ClipboardStore | undefined
+let reloadAll: (() => Promise<void>) | undefined
+let headlessRun: ((ref: string, args: string[]) => Promise<unknown>) | undefined
+let syncExtensions: ((list: ExtInfo[]) => void) | undefined
+let hooksRef: Parameters<typeof attachSearchService>[2] | undefined
 let rebuildFilesHook: (() => Promise<void>) | undefined
 let rid = 0
 const waiting = new Map<number, (v: string) => void>()
@@ -137,6 +159,27 @@ const integrationsSchema = z.record(
     showSpoilers: z.boolean().default(false),
   }),
 )
+const scriptsSchema = z.object({
+  folders: z
+    .array(
+      z.object({
+        path: z.string(),
+        interpreters: z.record(z.string()).optional(),
+        cwd: z.string().optional(),
+        env: z.array(z.string()).optional(),
+        extraPath: z.array(z.string()).optional(),
+      }),
+    )
+    .default([]),
+  envAllow: z.array(z.string()).default([]),
+  extraPath: z.array(z.string()).default([]),
+  timeoutSec: z.number().positive().default(30),
+  maxOutputBytes: z.number().int().positive().default(1_048_576),
+  concurrency: z.number().int().positive().default(4),
+  history: z.boolean().default(false),
+  tsRunner: z.array(z.string()).optional(),
+  terminal: z.object({ command: z.array(z.string()).optional() }).optional(),
+})
 const pinsSchema = z.array(z.any())
 const aliasSchema = z.record(z.any())
 const clipConfigSchema = z.object({
@@ -404,6 +447,127 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
   rebuildFilesHook = rebuildFiles
   dbg('files set up')
   engine.register(new RecentsProvider(apps, frecency))
+  // ---- scripts, workflows, extensions (M8) ----
+  const scriptsCfg = file<ScriptsConfig>(
+    'config/scripts.json',
+    scriptsSchema as never,
+    () => scriptsSchema.parse({}) as ScriptsConfig,
+  )
+  await scriptsCfg.load()
+  const trustFile = file<TrustFile>(
+    'config/script-trust.json',
+    z.record(z.any()) as never,
+    () => ({}),
+  )
+  await trustFile.load()
+  const scriptsDir = join(dataDir, 'scripts')
+  await mkdir(scriptsDir, { recursive: true })
+  let scriptEntries: ScriptEntry[] = []
+  let stopScriptWatch: (() => Promise<void>) | undefined
+  const effectiveScriptsCfg = (): ScriptsConfig => {
+    const c = { ...DEFAULT_SCRIPTS_CONFIG, ...scriptsCfg.data }
+    // The default scripts folder is always included so "New script" has somewhere to go.
+    return c.folders.some((f) => f.path === scriptsDir)
+      ? c
+      : { ...c, folders: [...c.folders, { path: scriptsDir }] }
+  }
+  const reloadScripts = async (): Promise<void> => {
+    const c = effectiveScriptsCfg()
+    scriptEntries = await scanScripts(c)
+    await stopScriptWatch?.()
+    stopScriptWatch = watchScripts(
+      c.folders.map((f) => f.path),
+      () => void reloadScripts(),
+    )
+  }
+  const scriptManager = new ScriptManager({
+    cfg: effectiveScriptsCfg,
+    entries: () => scriptEntries,
+    trust: new ScriptTrust(trustFile, join(dataDir, 'data/script-runs/trusted')),
+    effects: () => effects,
+    historyFile: join(dataDir, 'data/script-runs/history.jsonl'),
+    sshHosts: async () =>
+      (await parseSshConfig(join(homedir(), '.ssh/config'))).map((h) => h.alias),
+    onRunningChange: (n) => parentPort.postMessage({ type: 'scripts-running', n }),
+  })
+  void reloadScripts()
+  // Hand edits to scripts.json take effect live.
+  chokidar
+    .watch(scriptsCfg.path, { ignoreInitial: true })
+    .on('change', () => void scriptsCfg.load().then(reloadScripts))
+    .on('error', () => {})
+
+  const wfStore = new WorkflowStore(join(dataDir, 'workflows'))
+  await mkdir(wfStore.dir, { recursive: true })
+  const wfProvider = new WorkflowProvider(wfStore, (ref, args) =>
+    scriptManager.runHeadless(ref, args),
+  )
+  const reloadWorkflows = async () => {
+    await wfStore.load()
+    wfProvider.refreshTriggers()
+  }
+  await reloadWorkflows()
+  let wfTimer: NodeJS.Timeout | undefined
+  chokidar
+    .watch(wfStore.dir, { ignoreInitial: true, depth: 0 })
+    .on('all', () => {
+      clearTimeout(wfTimer)
+      wfTimer = setTimeout(() => void reloadWorkflows(), 250)
+    })
+    .on('error', () => {})
+  reloadAll = async () => {
+    await Promise.all([scriptsCfg.load(), trustFile.load()])
+    await Promise.all([reloadScripts(), reloadWorkflows()])
+  }
+  headlessRun = (ref, args) => scriptManager.runHeadless(ref, args)
+
+  const extTrust = file<string[]>(
+    'config/extension-trust.json',
+    z.array(z.string()) as never,
+    () => [],
+  )
+  await extTrust.load()
+  let extList: ExtInfo[] = []
+  const proxies = new Map<string, ExtensionProxyProvider>()
+  const ask = async (payload: unknown): Promise<unknown> => {
+    const r = JSON.parse(await effect('ext', payload, true)) as { error?: string; value?: unknown }
+    if (r.error) throw new Error(r.error)
+    return r.value
+  }
+  const extBridge: ExtBridge = {
+    query: async (id, q) => (await ask({ op: 'query', id, q })) as never,
+    activate: async (id, itemId, actionId) =>
+      void (await ask({ op: 'activate', id, itemId, actionId })),
+    admin: async (op, id) => void (await ask({ op: 'admin', admin: op, id })),
+  }
+  syncExtensions = (list) => {
+    extList = list
+    for (const id of proxies.keys()) engine.unregister('ext:' + id)
+    proxies.clear()
+    for (const info of list) {
+      if (info.state !== 'enabled' && info.state !== 'restarting') continue
+      const p = new ExtensionProxyProvider(info, extBridge, extTrust)
+      proxies.set(info.id, p)
+      engine.register(p)
+    }
+  }
+  hooksRef = {
+    pin: (i) => pins.toggle(i),
+    scriptRun: (msg, post) =>
+      void scriptManager.run(
+        msg.runId,
+        {
+          scriptId: msg.scriptId,
+          ...(msg.args ? { args: msg.args } : {}),
+          ...(msg.trustHash ? { trustHash: msg.trustHash } : {}),
+          ...(msg.confirmed ? { confirmed: true } : {}),
+          ...(msg.selection !== undefined ? { selection: msg.selection } : {}),
+        },
+        (e) => post(e as unknown as Record<string, unknown>),
+      ),
+    scriptCancel: (runId) => scriptManager.cancel(runId),
+  }
+
   // Resolve free text to its best result (used by `alias` / `hotkey` commands).
   const resolve = async (text: string): Promise<ResultItem | undefined> => {
     const skip = new Set(['recents', 'pins', 'aliases', 'alias', 'hotkey', 'todos'])
@@ -416,6 +580,9 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
   }
   for (const p of [
     new PinsProvider(pins),
+    new ScriptsProvider(scriptManager, () => scriptEntries, scriptsCfg, scriptsDir, reloadScripts),
+    wfProvider,
+    new ExtensionAdminProvider(() => extList, extBridge),
     new HubSetupProvider(adapters, intFile, hubProviders),
     ...hubProviders.values(),
     new MyAppsProvider(apps, MY_APPS),
@@ -499,8 +666,17 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
       paused?: boolean
       providerId?: string
       itemId?: string
+      list?: ExtInfo[]
+      script?: string
+      args?: string[]
     }
     if (m?.type === 'files-rebuild') void rebuildFilesHook?.()
+    else if (m?.type === 'reload-all') void reloadAll?.()
+    else if (m?.type === 'ext-list' && m.list) syncExtensions?.(m.list)
+    else if (m?.type === 'headless-run' && m.rid)
+      void headlessRun?.(m.script ?? '', m.args ?? []).then((result) =>
+        parentPort.postMessage({ type: 'headless-result', rid: m.rid, result }),
+      )
     else if (m?.type === 'clip-text' && typeof m.text === 'string')
       clip?.addText(m.text, { concealed: !!m.concealed })
     else if (m?.type === 'clip-image' && m.hash)
@@ -526,7 +702,18 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
       }
       port.on('message', (ev) => like.onmessage?.({ data: ev.data }))
       port.start()
-      detach = attachSearchService(like, engine, { pin: (i) => pins.toggle(i) })
+      detach = attachSearchService(like, engine, hooksRef ?? { pin: (i) => pins.toggle(i) })
+    }
+    if (m?.type === 'aux-port' && e.ports[0]) {
+      // Extra short-lived port (CLI queries). Does not replace the launcher's port.
+      const port = e.ports[0]
+      const like = {
+        postMessage: (msg: unknown) => port.postMessage(msg),
+        onmessage: null as ((ev: { data: unknown }) => void) | null,
+      }
+      port.on('message', (ev) => like.onmessage?.({ data: ev.data }))
+      port.start()
+      attachSearchService(like, engine, {})
     }
   })
   dbg('ready')

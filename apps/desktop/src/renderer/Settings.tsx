@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { BeaconSettings } from './global'
 import { applyTheme } from './theme'
+import { ExtensionsSection, ScriptsSection, WorkflowsSection } from './SettingsExtras'
 
 export function Settings() {
   const [s, setS] = useState<BeaconSettings | null>(null)
@@ -88,6 +89,9 @@ export function Settings() {
           Glass effect (applies after restart; solid surface when unsupported)
         </label>
       </section>
+      <ScriptsSection />
+      <WorkflowsSection />
+      <ExtensionsSection />
       <section>
         <h2>About &amp; diagnostics</h2>
         <p>

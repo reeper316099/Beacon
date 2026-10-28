@@ -8,13 +8,16 @@ export interface ApiHandlers {
   show(): void
   hide(): void
   status(): unknown
+  query(text: string): Promise<unknown[]>
+  run(script: string, args: string[]): Promise<unknown>
+  reload(): void
 }
 
 /** Local control API: 127.0.0.1, ephemeral port, per-launch bearer token. Not the search hot path. */
 export async function startApi(dataDir: string, h: ApiHandlers): Promise<() => Promise<void>> {
   const token = randomBytes(32).toString('hex')
   const expected = Buffer.from(`Bearer ${token}`)
-  const app = Fastify({ logger: false })
+  const app = Fastify({ logger: false, bodyLimit: 256 * 1024 })
   let port = 0
 
   app.addHook('onRequest', async (req, reply) => {
@@ -29,6 +32,25 @@ export async function startApi(dataDir: string, h: ApiHandlers): Promise<() => P
   app.post('/v1/show', async () => (h.show(), { ok: true }))
   app.post('/v1/hide', async () => (h.hide(), { ok: true }))
   app.get('/v1/status', async () => h.status())
+  app.post('/v1/query', async (req, reply) => {
+    const b = req.body as { text?: unknown } | null
+    if (typeof b?.text !== 'string' || b.text.length > 500)
+      return reply.code(400).send({ error: 'text required' })
+    return { items: await h.query(b.text) }
+  })
+  app.post('/v1/run', async (req, reply) => {
+    const b = req.body as { script?: unknown; args?: unknown } | null
+    const args = Array.isArray(b?.args) ? b.args : []
+    if (
+      typeof b?.script !== 'string' ||
+      !b.script ||
+      args.length > 50 ||
+      args.some((a) => typeof a !== 'string' || a.length > 4000)
+    )
+      return reply.code(400).send({ error: 'script and string args required' })
+    return h.run(b.script, args as string[])
+  })
+  app.post('/v1/reload', async () => (h.reload(), { ok: true }))
 
   await app.listen({ host: '127.0.0.1', port: 0 })
   port = (app.server.address() as { port: number }).port

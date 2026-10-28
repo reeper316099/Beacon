@@ -2,7 +2,7 @@
 
 A local-first, keyboard-first command bar for Windows, macOS and Linux. MIT licensed. No telemetry, no accounts, no network calls.
 
-Status: M0–M3 done (scaffold, core engine, app discovery, Electron shell). See `docs/PERFORMANCE.md` and `docs/PLATFORMS.md`.
+Status: M0–M8 done (core engine, apps, launcher shell, built-in providers, clipboard/snippets/notes, files/bookmarks/SSH, hub for the sibling apps, scripts/workflows/extensions/CLI). Docs: `docs/SCRIPTS.md`, `docs/EXTENSIONS.md`, `docs/INTEGRATIONS.md`, `docs/PLATFORMS.md`, `docs/PRIVACY.md`, `docs/PERFORMANCE.md`.
 
 ```bash
 npm install

@@ -16,7 +16,8 @@
     "@beacon/matcher": "*",
     "@beacon/providers": "*",
     "@beacon/shared": "*",
-    "zod": "^3.25.0"
+    "zod": "^3.25.0",
+    "chokidar": "^4.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

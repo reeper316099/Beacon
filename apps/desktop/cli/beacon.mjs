@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 // Beacon CLI: drives the running app over its local API (127.0.0.1 + per-launch token).
+//   beacon toggle|show|hide|status|reload
+//   beacon query <text...> [--json]
+//   beacon run <script> [-- args...]
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -11,21 +14,23 @@ function dataDir() {
   return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'Beacon')
 }
 
-const [cmd] = process.argv.slice(2)
-const routes = {
+const argv = process.argv.slice(2)
+const [cmd, ...rest] = argv
+const simple = {
   toggle: ['POST', 'toggle'],
   show: ['POST', 'show'],
   hide: ['POST', 'hide'],
+  reload: ['POST', 'reload'],
   status: ['GET', 'status'],
 }
-if (!routes[cmd]) {
+const usage = () => {
   console.error(
-    cmd && ['query', 'run', 'reload'].includes(cmd)
-      ? `beacon ${cmd}: not available yet (planned for M8).`
-      : 'usage: beacon toggle|show|hide|status',
+    'usage: beacon toggle|show|hide|status|reload\n       beacon query <text...> [--json]\n       beacon run <script> [-- args...]',
   )
   process.exit(2)
 }
+if (!cmd || !(simple[cmd] || cmd === 'query' || cmd === 'run')) usage()
+
 let api
 try {
   api = JSON.parse(readFileSync(join(dataDir(), 'runtime/api.json'), 'utf8'))
@@ -33,14 +38,43 @@ try {
   console.error('Beacon is not running (no runtime/api.json).')
   process.exit(1)
 }
-const [method, path] = routes[cmd]
-try {
+
+async function call(method, path, body) {
   const res = await fetch(`http://127.0.0.1:${api.port}/v1/${path}`, {
     method,
-    headers: { authorization: `Bearer ${api.token}` },
+    headers: {
+      authorization: `Bearer ${api.token}`,
+      ...(body ? { 'content-type': 'application/json' } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  if (cmd === 'status') console.log(JSON.stringify(await res.json(), null, 2))
+  return res.json()
+}
+
+try {
+  if (simple[cmd]) {
+    const [method, path] = simple[cmd]
+    const out = await call(method, path)
+    if (cmd === 'status') console.log(JSON.stringify(out, null, 2))
+  } else if (cmd === 'query') {
+    const json = rest.includes('--json')
+    const text = rest.filter((a) => a !== '--json').join(' ')
+    const { items } = await call('POST', 'query', { text })
+    if (json) console.log(JSON.stringify(items, null, 2))
+    else
+      for (const i of items)
+        console.log(`${i.title}${i.subtitle ? '  —  ' + i.subtitle : ''}  [${i.provider}]`)
+  } else if (cmd === 'run') {
+    const dd = rest.indexOf('--')
+    const script = rest[0]
+    if (!script || script === '--') usage()
+    const args = dd >= 0 ? rest.slice(dd + 1) : rest.slice(1)
+    const r = await call('POST', 'run', { script, args })
+    if (r.output) process.stdout.write(r.output.endsWith('\n') ? r.output : r.output + '\n')
+    if (r.error) console.error(r.error)
+    process.exit(r.ok ? 0 : typeof r.exitCode === 'number' && r.exitCode > 0 ? r.exitCode : 1)
+  }
 } catch (e) {
   console.error(`beacon ${cmd} failed: ${e.message}`)
   process.exit(1)

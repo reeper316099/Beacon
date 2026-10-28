@@ -1,0 +1,10 @@
+{
+  "id": "hello-ext",
+  "name": "Hello Extension",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "main": "index.js",
+  "description": "Example Beacon extension",
+  "commands": [{ "keyword": "hello", "title": "Say hello" }],
+  "permissions": ["clipboard.write", "notifications"]
+}

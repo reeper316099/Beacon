@@ -11,6 +11,12 @@ const on = (ch: string, cb: (...a: never[]) => void) => {
 
 contextBridge.exposeInMainWorld('beacon', {
   hide: () => ipcRenderer.send('hide'),
+  listWorkflows: () => ipcRenderer.invoke('workflows:list'),
+  saveWorkflow: (file: string, raw: string) => ipcRenderer.invoke('workflows:save', file, raw),
+  deleteWorkflow: (file: string) => ipcRenderer.invoke('workflows:delete', file),
+  listExtensions: () => ipcRenderer.invoke('extensions:list'),
+  extensionAction: (op: string, id: string) => ipcRenderer.invoke('extensions:do', op, id),
+  openScriptsFolder: () => ipcRenderer.invoke('scripts:open-folder'),
   rebuildFiles: () => ipcRenderer.send('files:rebuild'),
   openSettings: () => ipcRenderer.send('open-settings'),
   getSettings: () => ipcRenderer.invoke('settings:get'),

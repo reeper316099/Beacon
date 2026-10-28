@@ -95,6 +95,8 @@ export interface Provider {
   icon?: string
   triggers?: string[]
   mode: 'global' | 'prefix-only'
+  /** Per-provider timeout override in ms (default: the engine's). */
+  timeoutMs?: number
   /** Multiplier applied to match score during ranking. Default 1. */
   weight?: number
   init?(ctx: ProviderContext): Promise<void>
