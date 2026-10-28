@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+release/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+.vite/
+# Local-only fixtures: never commit personal data
+private-fixtures/*
+!private-fixtures/.gitkeep
