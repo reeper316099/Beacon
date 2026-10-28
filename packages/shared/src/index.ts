@@ -71,6 +71,10 @@ export interface Effects {
   openUrl(url: string): Promise<void>
   notify(title: string, body?: string): Promise<void>
   readClipboard(): Promise<string>
+  /** Open a file/folder with the default application. */
+  openPath(path: string): Promise<void>
+  /** Reveal a file in the system file manager. */
+  reveal(path: string): Promise<void>
   /** Put a stored clipboard image (by content hash) back on the clipboard. */
   copyImage(hash: string): Promise<void>
   /** Register a global hotkey that activates an item. */

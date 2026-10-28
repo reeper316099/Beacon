@@ -358,3 +358,20 @@ body:has(.settings) {
   box-shadow: var(--shadow-md);
   font-size: var(--fs-sm);
 }
+
+.preview {
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4);
+  max-height: 160px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  font:
+    12px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  user-select: text;
+}

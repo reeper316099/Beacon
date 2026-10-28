@@ -19,3 +19,10 @@ Idle memory is measured as physical footprint (macOS `footprint`, Linux Pss, Win
 
 - Hotkey→visible uses a synthetic call to `showLauncher()`, not an OS key event.
 - Windows and Linux numbers are pending CI runs.
+
+## Files index (M6)
+
+- Default: up to 100k entries under the configured roots (Home by default), throttled breadth-first crawl in a **short-lived child process** that writes a snapshot to the cache dir and exits; the search worker only loads the snapshot. (Crawling inside the long-lived worker left ~100 MB of freed-but-retained memory; the child process avoids it.)
+- Search over the index is memory-lean (`searchLean`, no per-item prepared state) and time-boxed to 60 ms, so a huge index never blocks the worker. Cost: ~12 ms p50 / 30 ms max per query at 50k synthetic names (`npx tsx packages/core/bench/lean.ts`), slower than the prepared apps index (11 ms p95 at 50k) — file results arrive after fast providers, they never delay them.
+- Idle footprint on macOS with a 100k-file index: ≈ 198 MB (≈ 179 MB with no file index). Memory grows roughly 0.2 MB per 1k files.
+- The global (no-trigger) file search needs ≥ 3 characters; `f <text>` searches from 1.

@@ -20,6 +20,7 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
           searchWorker: resolve(__dirname, 'src/worker/search.ts'),
+          crawlWorker: resolve(__dirname, 'src/worker/crawlThread.ts'),
         },
       },
     },

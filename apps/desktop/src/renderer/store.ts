@@ -20,6 +20,8 @@ interface State {
   confirm: { title: string; actionId?: string; index: number } | null
   askConfirm(c: State['confirm']): void
   toast: string | null
+  preview: boolean
+  togglePreview(): void
   pin(): void
   forget(): void
   settings: BeaconSettings | null
@@ -54,6 +56,8 @@ export const useStore = create<State>((set, get) => ({
   actionIndex: 0,
   confirm: null,
   toast: null,
+  preview: false,
+  togglePreview: () => set((s) => ({ preview: !s.preview })),
   askConfirm: (c) => set({ confirm: c }),
   settings: null,
   searching: false,

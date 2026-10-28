@@ -5,13 +5,19 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./files": "./src/files.ts"
   },
   "dependencies": {
     "@beacon/core": "*",
     "@beacon/jsonstore": "*",
     "@beacon/matcher": "*",
     "@beacon/shared": "*",
-    "mathjs": "^14.0.0"
+    "chokidar": "^5.0.0",
+    "mathjs": "^14.0.0",
+    "sql.js": "^1.15.2"
+  },
+  "devDependencies": {
+    "@types/sql.js": "^1.4.11"
   }
 }

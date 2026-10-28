@@ -354,3 +354,54 @@ export class FuzzyIndex<T> {
     return top
   }
 }
+
+// ---------- lean search over plain strings (large indexes) ----------
+
+const foldCode = (c: number): number => {
+  if (c < 128) return c >= 65 && c <= 90 ? c + 32 : c
+  return fold(String.fromCharCode(c)).charCodeAt(0)
+}
+
+/** Cheap case/diacritic-insensitive subsequence test; rejects most non-matches before the DP runs. */
+function subseqLean(raw: string, tok: string): boolean {
+  let j = 0
+  const m = tok.length
+  for (let i = 0; i < raw.length && j < m; i++)
+    if (foldCode(raw.charCodeAt(i)) === tok.charCodeAt(j)) j++
+  return j === m
+}
+
+/**
+ * Top-k search over raw strings without keeping per-item prepared state (a few dozen bytes per
+ * item instead of hundreds). Prepares only candidates that pass the subsequence prefilter.
+ * `budgetMs` stops early and returns the best so far, so a huge index can never block the thread.
+ */
+export function searchLean(
+  texts: readonly string[],
+  query: string,
+  limit: number,
+  budgetMs = Infinity,
+): { index: number; score: number }[] {
+  const q = compile(query)
+  const top: { index: number; score: number }[] = []
+  const start = performance.now()
+  for (let i = 0; i < texts.length; i++) {
+    if ((i & 4095) === 0 && performance.now() - start > budgetMs) break
+    const t = texts[i] as string
+    let ok = true
+    for (const tok of q.tokens)
+      if (!subseqLean(t, tok)) {
+        ok = false
+        break
+      }
+    if (!ok) continue
+    const s = score(prepare(t), q)
+    if (s === null) continue
+    if (top.length >= limit && s <= (top[top.length - 1] as { score: number }).score) continue
+    let k = top.length
+    while (k > 0 && (top[k - 1] as { score: number }).score < s) k--
+    top.splice(k, 0, { index: i, score: s })
+    if (top.length > limit) top.pop()
+  }
+  return top
+}

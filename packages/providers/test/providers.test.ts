@@ -228,6 +228,8 @@ describe('provider integration', () => {
     notify: async () => {},
     readClipboard: async () => '{"a":1}',
     copyImage: async () => {},
+    openPath: async () => {},
+    reveal: async () => {},
     bindHotkey: async () => {},
   }
   const ctx: ProviderContext = { now: () => now.getTime(), effects }

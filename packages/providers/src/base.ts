@@ -4,6 +4,7 @@ import type { Action, ParsedQuery, Provider, ProviderContext, ResultItem } from 
 export interface Run {
   file: string
   args: string[]
+  cwd?: string
 }
 
 export const copyAction = (text: string, title = 'Copy'): Action => ({
@@ -49,6 +50,7 @@ export function spawnArgv(spec: Run, wait = false): Promise<void> {
     const c = spawn(spec.file, spec.args, {
       stdio: 'ignore',
       shell: false,
+      ...(spec.cwd ? { cwd: spec.cwd } : {}),
       windowsHide: true,
       detached: !wait,
     })
@@ -119,6 +121,11 @@ export async function runAction(
     case 'copy':
       if (!fx || typeof p['text'] !== 'string') throw new Error('copy unavailable')
       return fx.copy(p['text'])
+    case 'open':
+    case 'reveal': {
+      if (!fx || typeof p['path'] !== 'string') throw new Error('open unavailable')
+      return a.kind === 'open' ? fx.openPath(p['path']) : fx.reveal(p['path'])
+    }
     case 'url':
       if (!fx || typeof p['url'] !== 'string') throw new Error('url unavailable')
       return fx.openUrl(p['url'])

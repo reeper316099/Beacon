@@ -1,10 +1,26 @@
 // Search worker (Electron utilityProcess). Owns indexes, frecency and providers; talks to the
 // renderer directly over a MessagePort so the hot path never touches the main process.
-import { execFile } from 'node:child_process'
+import { execFile, fork, type ChildProcess } from 'node:child_process'
+import { setFlagsFromString } from 'node:v8'
+import { runInNewContext } from 'node:vm'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
   AliasProvider,
+  BookmarksProvider,
+  DEFAULT_IGNORE_NAMES,
+  FileIndex,
+  FilesProvider,
+  SshProvider,
+  everythingSource,
+  locateSource,
+  makeIgnore,
+  mdfindSource,
+  watchFiles,
+  type FilesConfig,
+  type BookmarkConfig,
+  type TerminalConfig,
   BindProvider,
   CalculatorProvider,
   ClipboardProvider,
@@ -46,10 +62,21 @@ import { Frecency, SearchEngine, attachSearchService, type FrecencyData } from '
 import { JsonFile } from '@beacon/jsonstore'
 import type { Effects, ParsedQuery, Provider, ResultItem } from '@beacon/shared'
 
+// utilityProcess ignores --expose-gc, so obtain gc() via V8 flags. Used to hand crawl garbage back
+// right after indexing (idle memory is a requirement).
+let gcFn: (() => void) | undefined
+try {
+  setFlagsFromString('--expose-gc')
+  gcFn = runInNewContext('gc') as () => void
+} catch {
+  /* optional */
+}
+
 const parentPort = (process as unknown as { parentPort: Electron.ParentPort }).parentPort
 
 // Side effects (clipboard, browser, notifications) are performed by the main process.
 let clip: ClipboardStore | undefined
+let rebuildFilesHook: (() => Promise<void>) | undefined
 let rid = 0
 const waiting = new Map<number, (v: string) => void>()
 function effect(kind: string, payload: unknown, wantReply = false): Promise<string> {
@@ -63,6 +90,8 @@ const effects: Effects = {
   notify: async (title, body) => void (await effect('notify', { title, body })),
   readClipboard: () => effect('readClipboard', null, true),
   copyImage: async (hash) => void (await effect('copyImage', hash)),
+  openPath: async (path) => void (await effect('openPath', path)),
+  reveal: async (path) => void (await effect('reveal', path)),
   bindHotkey: async (accelerator, providerId, itemId, title) =>
     void (await effect('bindHotkey', { accelerator, providerId, itemId, title })),
 }
@@ -100,6 +129,16 @@ const clipConfigSchema = z.object({
   /** Regexes (strings); copies matching any are never stored. */
   ignore: z.array(z.string()).default([]),
 })
+const filesConfigSchema = z.object({
+  source: z.enum(['builtin', 'spotlight', 'everything', 'locate']).default('builtin'),
+  roots: z.array(z.string()).default(() => [homedir()]),
+  maxFiles: z.number().int().positive().default(100_000),
+  gitignore: z.boolean().default(false),
+  ignoreNames: z.array(z.string()).default([]),
+  ignoreGlobs: z.array(z.string()).default([]),
+})
+const terminalSchema = z.object({ command: z.array(z.string()).optional() })
+const bookmarkSchema = z.object({ enabled: z.array(z.string()).default([]) })
 const ratesSchema = z.record(z.number().positive())
 
 const frecencySchema = z.record(z.record(z.object({ v: z.number(), ts: z.number() })))
@@ -148,7 +187,20 @@ class RecentsProvider implements Provider {
   }
 }
 
-async function main(dataDir: string, clipPaused: boolean): Promise<void> {
+const dbg = (label: string) => {
+  if (!process.env['BEACON_DEBUG_MEM']) return
+  gcFn?.()
+  console.log(
+    'WORKERMEM',
+    label,
+    'gc=' + typeof gcFn,
+    Math.round(process.memoryUsage().heapUsed / 1e6) + 'MB heap',
+    Math.round(process.memoryUsage().rss / 1e6) + 'MB rss',
+  )
+}
+
+async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Promise<void> {
+  dbg('start')
   const store = new JsonFile<FrecencyData>({
     path: join(dataDir, 'data/frecency/frecency.json'),
     schema: frecencySchema,
@@ -217,7 +269,83 @@ async function main(dataDir: string, clipPaused: boolean): Promise<void> {
   clip.paused = clipPaused
   await clip.load()
   setInterval(() => clip?.prune(), 3_600_000).unref()
+  dbg('configs loaded')
   const pins = new PinStore(pinFile)
+
+  // Files: configurable source; the built-in index is crawled in the background, throttled and cancellable.
+  const filesCfg = await file<FilesConfig>('config/files.json', filesConfigSchema as never, () =>
+    filesConfigSchema.parse({}),
+  ).load()
+  const termCfg = await file<TerminalConfig>(
+    'config/terminal.json',
+    terminalSchema as never,
+    () => ({}),
+  ).load()
+  const bmFile = file<BookmarkConfig>('config/bookmarks.json', bookmarkSchema as never, () => ({
+    enabled: [],
+  }))
+  await bmFile.load()
+  const fileIndex = new FileIndex()
+  const snapshot = join(cacheDir, 'file-index/index.txt')
+  const ignore = makeIgnore(
+    [...DEFAULT_IGNORE_NAMES, ...filesCfg.ignoreNames],
+    filesCfg.ignoreGlobs,
+  )
+  const reportFiles = () =>
+    parentPort.postMessage({
+      type: 'files',
+      size: fileIndex.size,
+      scanning: fileIndex.scanning,
+      scanned: fileIndex.scanned,
+    })
+  const collect = () => gcFn?.()
+  let crawlProc: ChildProcess | undefined
+  const rebuildFiles = async () => {
+    if (filesCfg.source !== 'builtin') return
+    crawlProc?.kill() // a newer rebuild supersedes a running one
+    fileIndex.scanning = true
+    const t = setInterval(reportFiles, 1000)
+    try {
+      const job = {
+        roots: filesCfg.roots,
+        ignoreNames: [...DEFAULT_IGNORE_NAMES, ...filesCfg.ignoreNames],
+        ignoreGlobs: filesCfg.ignoreGlobs,
+        maxFiles: filesCfg.maxFiles,
+        gitignore: filesCfg.gitignore,
+        out: snapshot,
+      }
+      const child = (crawlProc = fork(join(__dirname, 'crawlWorker.js'), [JSON.stringify(job)], {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      }))
+      child.on('message', (m: { type: string; n?: number }) => {
+        if (m.type === 'progress') fileIndex.scanned = m.n ?? 0
+      })
+      const ok = await new Promise<boolean>((res) => {
+        child.once('message', (m: { type: string }) => m.type === 'done' && res(true))
+        child.once('error', () => res(false))
+        child.once('exit', (code) => res(code === 0))
+      })
+      if (ok && crawlProc === child) await fileIndex.load(snapshot)
+    } finally {
+      clearInterval(t)
+      fileIndex.scanning = false
+      collect()
+      dbg('after index')
+      reportFiles()
+    }
+  }
+  if (filesCfg.source === 'builtin') {
+    await fileIndex.load(snapshot) // instant results from the last session
+    collect()
+    void rebuildFiles().then(() => {
+      watchFiles(fileIndex, filesCfg.roots, ignore)
+      // Periodic low-priority rebuild catches changes the shallow watcher can't see.
+      setInterval(() => void rebuildFiles(), 30 * 60_000).unref()
+    })
+  }
+  rebuildFilesHook = rebuildFiles
+  dbg('files set up')
   engine.register(new RecentsProvider(apps, frecency))
   // Resolve free text to its best result (used by `alias` / `hotkey` commands).
   const resolve = async (text: string): Promise<ResultItem | undefined> => {
@@ -231,6 +359,14 @@ async function main(dataDir: string, clipPaused: boolean): Promise<void> {
   }
   for (const p of [
     new PinsProvider(pins),
+    new FilesProvider(
+      fileIndex,
+      () => filesCfg,
+      { spotlight: mdfindSource(), everything: everythingSource(), locate: locateSource() },
+      () => termCfg,
+    ),
+    new SshProvider(undefined, process.platform, () => termCfg),
+    new BookmarksProvider(bmFile),
     new AliasProvider(aliasFile),
     new BindProvider('alias', 'Aliases', aliasFile, resolve),
     new BindProvider('hotkey', 'Hotkeys', aliasFile, resolve),
@@ -304,7 +440,8 @@ async function main(dataDir: string, clipPaused: boolean): Promise<void> {
       providerId?: string
       itemId?: string
     }
-    if (m?.type === 'clip-text' && typeof m.text === 'string')
+    if (m?.type === 'files-rebuild') void rebuildFilesHook?.()
+    else if (m?.type === 'clip-text' && typeof m.text === 'string')
       clip?.addText(m.text, { concealed: !!m.concealed })
     else if (m?.type === 'clip-image' && m.hash)
       clip?.addImage(m.hash, m.bytes ?? 0, { concealed: !!m.concealed })
@@ -332,10 +469,12 @@ async function main(dataDir: string, clipPaused: boolean): Promise<void> {
       detach = attachSearchService(like, engine, { pin: (i) => pins.toggle(i) })
     }
   })
+  dbg('ready')
+  setTimeout(() => dbg('after 20s'), 20000).unref()
   parentPort.postMessage({ type: 'ready' })
 }
 
 parentPort.once('message', (e) => {
-  const m = e.data as { type: string; dataDir: string; clipboardPaused?: boolean }
-  if (m.type === 'init') void main(m.dataDir, !!m.clipboardPaused)
+  const m = e.data as { type: string; dataDir: string; cacheDir: string; clipboardPaused?: boolean }
+  if (m.type === 'init') void main(m.dataDir, m.cacheDir, !!m.clipboardPaused)
 })

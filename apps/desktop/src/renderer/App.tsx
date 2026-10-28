@@ -124,6 +124,7 @@ export function App() {
     else if (e.key === 'Enter') go(() => run())
     else if ((e.key === 'Tab' && !e.shiftKey) || (ctrl && e.key === 'k'))
       go(() => item && s.toggleActions(true))
+    else if (ctrl && e.key === 'i') go(() => s.togglePreview())
     else if (ctrl && e.key === 'p') go(() => s.pin())
     else if (ctrl && e.key === 'Backspace') go(() => s.forget())
     else if (ctrl && e.key === ',') go(() => window.beacon.openSettings())
@@ -212,6 +213,12 @@ export function App() {
           {s.items.length} results
         </div>
 
+        {s.preview && item && (
+          <pre className="preview" aria-label="Preview">
+            {item.preview?.value ?? `${item.title}\n${item.subtitle ?? ''}`}
+          </pre>
+        )}
+
         {s.actionsOpen && item && (
           <div className="actions" role="menu" aria-label="Actions">
             {actions.map((a, i) => (
@@ -251,6 +258,9 @@ export function App() {
           </span>
           <span>
             <kbd>{navigator.platform.startsWith('Mac') ? '⌘' : 'Ctrl'}P</kbd> Pin
+          </span>
+          <span>
+            <kbd>{navigator.platform.startsWith('Mac') ? '⌘' : 'Ctrl'}I</kbd> Preview
           </span>
           <span>
             <kbd>Esc</kbd> {s.query ? 'Clear' : 'Close'}

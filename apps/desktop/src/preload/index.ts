@@ -11,6 +11,7 @@ const on = (ch: string, cb: (...a: never[]) => void) => {
 
 contextBridge.exposeInMainWorld('beacon', {
   hide: () => ipcRenderer.send('hide'),
+  rebuildFiles: () => ipcRenderer.send('files:rebuild'),
   openSettings: () => ipcRenderer.send('open-settings'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch: unknown) => ipcRenderer.invoke('settings:set', patch),

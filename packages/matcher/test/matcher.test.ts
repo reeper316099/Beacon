@@ -154,3 +154,28 @@ describe('match()', () => {
     expect(match(p, q)!.score).toBe(score(p, q))
   })
 })
+
+describe('searchLean', () => {
+  it('ranks like FuzzyIndex and respects the time budget', async () => {
+    const { searchLean } = await import('../src/index')
+    const items = [
+      'Visual Studio Code',
+      'Vascular Scan',
+      'Café Résumé',
+      'notes.md',
+      'Firefox',
+      'Safari Offline',
+    ]
+    for (const q of ['vsc', 'cafe', 'ff', 'notes md', 'zzz']) {
+      const a = new FuzzyIndex(items.map((t) => [t, t] as [string, string]))
+        .search(q, 10)
+        .map((r) => r.item)
+      const b = searchLean(items, q, 10).map((r) => items[r.index])
+      expect(b).toEqual(a)
+    }
+    const big = Array.from({ length: 200_000 }, (_, i) => `file-${i}-name`)
+    const t = performance.now()
+    searchLean(big, 'fn', 5, 5)
+    expect(performance.now() - t).toBeLessThan(200)
+  })
+})

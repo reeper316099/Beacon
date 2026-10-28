@@ -9,6 +9,7 @@ export interface BeaconSettings {
 }
 export interface BeaconApi {
   hide(): void
+  rebuildFiles(): void
   openSettings(): void
   getSettings(): Promise<BeaconSettings>
   setSettings(

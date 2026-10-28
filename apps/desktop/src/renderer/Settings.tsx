@@ -103,6 +103,13 @@ export function Settings() {
               {perf.worker ? `${perf.worker.apps} apps in ${perf.worker.ms} ms` : 'indexing…'}
             </li>
             <li>
+              Files:{' '}
+              {perf.files
+                ? `${perf.files.size.toLocaleString()} indexed${perf.files.scanning ? ` (scanning… ${perf.files.scanned.toLocaleString()})` : ''}`
+                : 'n/a'}{' '}
+              <button onClick={() => window.beacon.rebuildFiles()}>Rebuild file index</button>
+            </li>
+            <li>
               Hotkey → visible p50: {perf.hotkeyToVisibleMs.p50 ?? '–'} ms (n=
               {perf.hotkeyToVisibleMs.n})
             </li>

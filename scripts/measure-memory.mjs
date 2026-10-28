@@ -8,7 +8,10 @@ import { join } from 'node:path'
 
 const settleMs = Number(process.env.SETTLE_MS ?? 10000)
 const electron = join(import.meta.dirname, '../node_modules/.bin/electron')
-const env = { ...process.env, BEACON_DATA_DIR: mkdtempSync(join(tmpdir(), 'beacon-mem-')) }
+const env = {
+  ...process.env,
+  BEACON_DATA_DIR: process.env.BEACON_DATA_DIR ?? mkdtempSync(join(tmpdir(), 'beacon-mem-')),
+}
 const child = spawn(electron, ['apps/desktop'], {
   env,
   stdio: 'ignore',
@@ -52,7 +55,14 @@ for (const pid of tree(child.pid)) {
     if (process.platform === 'darwin') {
       const o = execFileSync('footprint', ['-p', String(pid)], { encoding: 'utf8' })
       const m = /Footprint:\s+([\d.]+)\s+(KB|MB|GB)/.exec(o)
-      if (m) totalMB += Number(m[1]) * { KB: 1 / 1024, MB: 1, GB: 1024 }[m[2]]
+      if (m) {
+        const mb = Number(m[1]) * { KB: 1 / 1024, MB: 1, GB: 1024 }[m[2]]
+        totalMB += mb
+        if (process.env.VERBOSE)
+          console.log(
+            `  pid ${pid}: ${mb.toFixed(0)} MB ${/\[\d+\]/.exec(o)?.input.split('\n')[0].slice(0, 60) ?? ''}`,
+          )
+      }
     } else if (process.platform === 'linux') {
       const m = /Pss:\s+(\d+) kB/.exec(readFileSync(`/proc/${pid}/smaps_rollup`, 'utf8'))
       if (m) totalMB += Number(m[1]) / 1024

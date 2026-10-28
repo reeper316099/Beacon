@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import {
   BrowserWindow,
   Notification,
@@ -34,6 +34,18 @@ if (isWayland) app.commandLine.appendSwitch('enable-features', 'GlobalShortcutsP
 
 const WIDTH = 720
 const HEIGHT = 560
+/** OS cache dir (safe to delete): index caches live here, not in the data dir. */
+function cacheRoot(): string {
+  if (process.env['BEACON_CACHE_DIR']) return process.env['BEACON_CACHE_DIR']
+  const home = app.getPath('home')
+  const base =
+    process.platform === 'darwin'
+      ? join(home, 'Library/Caches')
+      : process.platform === 'win32'
+        ? (process.env['LOCALAPPDATA'] ?? join(home, 'AppData/Local'))
+        : (process.env['XDG_CACHE_HOME'] ?? join(home, '.cache'))
+  return join(base, APP_NAME)
+}
 const dataDir = process.env['BEACON_DATA_DIR'] || app.getPath('userData')
 
 let win: BrowserWindow | null = null
@@ -47,6 +59,7 @@ const store = settingsFile(dataDir)
 const perf = {
   coldStartMs: 0,
   workerIndexed: null as null | { apps: number; ms: number },
+  files: null as null | { size: number; scanning: boolean; scanned: number },
   shown: [] as number[],
   keystroke: [] as number[],
   keystrokePaint: [] as number[],
@@ -75,6 +88,12 @@ function handleEffect(kind: string, payload: unknown, rid: number): void {
         new Notification({ title: String(p.title ?? ''), body: String(p.body ?? '') }).show()
       break
     }
+    case 'openPath':
+      if (typeof payload === 'string' && isAbsolute(payload)) void shell.openPath(payload)
+      break
+    case 'reveal':
+      if (typeof payload === 'string' && isAbsolute(payload)) shell.showItemInFolder(payload)
+      break
     case 'copyImage': {
       const h = String(payload)
       if (/^[0-9a-f]{16}$/.test(h))
@@ -262,6 +281,7 @@ function status() {
     perf: {
       coldStartMs: perf.coldStartMs,
       worker: perf.workerIndexed,
+      files: perf.files,
       hotkeyToVisibleMs: {
         n: perf.shown.length,
         p50: p50(perf.shown),
@@ -318,12 +338,22 @@ if (!app.requestSingleInstanceLock()) {
         kind?: string
         payload?: unknown
         rid?: number
+        size?: number
+        scanning?: boolean
+        scanned?: number
       }) => {
         if (m?.type === 'effect') return void handleEffect(m.kind ?? '', m.payload, m.rid ?? 0)
+        if (m?.type === 'files')
+          perf.files = { size: m.size ?? 0, scanning: !!m.scanning, scanned: m.scanned ?? 0 }
         if (m?.type === 'indexed') perf.workerIndexed = { apps: m.apps ?? 0, ms: m.ms ?? 0 }
       },
     )
-    worker.postMessage({ type: 'init', dataDir, clipboardPaused: settings.clipboardPaused })
+    worker.postMessage({
+      type: 'init',
+      dataDir,
+      cacheDir: cacheRoot(),
+      clipboardPaused: settings.clipboardPaused,
+    })
 
     win = createWindow()
     registerHotkey()
@@ -369,6 +399,7 @@ if (!app.requestSingleInstanceLock()) {
     })
 
     ipcMain.on('hide', hideLauncher)
+    ipcMain.on('files:rebuild', () => worker?.postMessage({ type: 'files-rebuild' }))
     ipcMain.on('open-settings', () => {
       hideLauncher()
       openSettings()

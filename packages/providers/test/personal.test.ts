@@ -132,6 +132,8 @@ describe('snippets', () => {
       notify: async () => {},
       readClipboard: async () => 'C',
       copyImage: async () => {},
+      openPath: async () => {},
+      reveal: async () => {},
       bindHotkey: async () => {},
     }
     const ctx: ProviderContext = { now: () => new Date(2026, 0, 5).getTime(), effects: fx }
