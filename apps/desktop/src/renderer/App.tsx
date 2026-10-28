@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { compile, match, prepare } from '@beacon/matcher'
 import type { ResultItem } from '@beacon/shared'
-import { useStore } from './store'
+import { markCommitted, useStore } from './store'
 import { applyTheme } from './theme'
 
 const ROW = 48
@@ -21,13 +21,15 @@ function Icon({ item }: { item: ResultItem }) {
   )
   useEffect(() => {
     const p = item.icon
-    if (!p) return
+    if (!p || p.startsWith('color:')) return
     if (iconCache.has(p)) return setSrc(iconCache.get(p) ?? null)
     void window.beacon.getIcon(p).then((u) => {
       iconCache.set(p, u)
       setSrc(u)
     })
   }, [item.icon])
+  if (item.icon?.startsWith('color:'))
+    return <span className="icon swatch" style={{ background: item.icon.slice(6) }} aria-hidden />
   if (src) return <img className="icon" src={src} alt="" draggable={false} />
   return (
     <span className="icon letter" style={{ ['--h' as string]: hue(item.title) }} aria-hidden>
@@ -76,32 +78,54 @@ export function App() {
     overscan: 4,
   })
   useEffect(() => virt.scrollToIndex(s.selected), [s.selected, virt])
+  useLayoutEffect(markCommitted, [s.items])
 
   const item = s.items[s.selected]
   const actions = item
     ? [{ id: undefined as string | undefined, title: 'Open' }, ...(item.actions ?? [])]
     : []
 
+  /** Run an action, asking first when the action is marked `confirm`. */
+  function run(actionId?: string, index?: number) {
+    const it = s.items[index ?? s.selected]
+    if (!it) return
+    const act = actionId
+      ? [it.primary, ...(it.actions ?? [])].find((a) => a.id === actionId)
+      : it.primary
+    if (act?.confirm)
+      s.askConfirm({
+        title: act.title,
+        index: index ?? s.selected,
+        ...(actionId ? { actionId } : {}),
+      })
+    else s.activate(actionId, index)
+  }
+
   function onKeyDown(e: React.KeyboardEvent) {
     const go = (fn: () => void) => {
       e.preventDefault()
       fn()
     }
+    if (s.confirm) {
+      if (e.key === 'Enter') go(() => s.activate(s.confirm?.actionId, s.confirm?.index))
+      else if (e.key === 'Escape') go(() => s.askConfirm(null))
+      return
+    }
     const ctrl = e.ctrlKey || e.metaKey
     if (s.actionsOpen) {
       if (e.key === 'ArrowDown') go(() => s.moveAction(1))
       else if (e.key === 'ArrowUp') go(() => s.moveAction(-1))
-      else if (e.key === 'Enter') go(() => s.activate(actions[s.actionIndex]?.id))
+      else if (e.key === 'Enter') go(() => run(actions[s.actionIndex]?.id))
       else if (e.key === 'Escape' || e.key === 'Tab') go(() => s.toggleActions(false))
       return
     }
     if (e.key === 'ArrowDown' || (ctrl && e.key === 'n')) go(() => s.move(1))
     else if (e.key === 'ArrowUp' || (ctrl && e.key === 'p')) go(() => s.move(-1))
-    else if (e.key === 'Enter') go(() => s.activate())
+    else if (e.key === 'Enter') go(() => run())
     else if ((e.key === 'Tab' && !e.shiftKey) || (ctrl && e.key === 'k'))
       go(() => item && s.toggleActions(true))
     else if (ctrl && e.key === ',') go(() => window.beacon.openSettings())
-    else if (ctrl && /^[1-9]$/.test(e.key)) go(() => s.activate(undefined, Number(e.key) - 1))
+    else if (ctrl && /^[1-9]$/.test(e.key)) go(() => run(undefined, Number(e.key) - 1))
     else if (e.key === 'Escape') {
       e.preventDefault()
       if (s.query) s.reset()
@@ -122,7 +146,7 @@ export function App() {
             autoFocus
             spellCheck={false}
             autoComplete="off"
-            placeholder="Search apps…"
+            placeholder="Search apps, calculate, or type a command…"
             aria-label="Search"
             role="combobox"
             aria-expanded
@@ -151,7 +175,7 @@ export function App() {
                   className={'row' + (v.index === s.selected ? ' sel' : '')}
                   style={{ height: ROW, transform: `translateY(${v.start}px)` }}
                   onMouseMove={() => v.index !== s.selected && s.select(v.index)}
-                  onClick={() => s.activate(undefined, v.index)}
+                  onClick={() => run(undefined, v.index)}
                 >
                   <Icon item={it} />
                   <span className="text">
@@ -174,7 +198,11 @@ export function App() {
           {!s.items.length && (
             <div className="empty">
               {s.error ??
-                (s.query ? (s.searching ? 'Searching…' : 'No results') : 'Type to search apps')}
+                (s.query
+                  ? s.searching
+                    ? 'Searching…'
+                    : 'No results'
+                  : 'Try “23*1.08”, “uuid”, “g cats”, “timer 5m”, or an app name')}
             </div>
           )}
         </div>
@@ -189,11 +217,20 @@ export function App() {
                 key={a.id ?? 'primary'}
                 role="menuitem"
                 className={'act' + (i === s.actionIndex ? ' sel' : '')}
-                onClick={() => s.activate(a.id)}
+                onClick={() => run(a.id)}
               >
                 {a.title}
               </div>
             ))}
+          </div>
+        )}
+
+        {s.confirm && (
+          <div className="confirm" role="alertdialog" aria-label="Confirm">
+            <span>{s.confirm.title}?</span>
+            <span>
+              <kbd>↵</kbd> Confirm <kbd>Esc</kbd> Cancel
+            </span>
           </div>
         )}
 

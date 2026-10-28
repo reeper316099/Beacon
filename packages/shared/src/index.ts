@@ -65,8 +65,17 @@ export interface ParsedQuery {
   args: string[]
 }
 
+/** Side effects that must happen outside the search worker (clipboard, browser, notifications). */
+export interface Effects {
+  copy(text: string): Promise<void>
+  openUrl(url: string): Promise<void>
+  notify(title: string, body?: string): Promise<void>
+  readClipboard(): Promise<string>
+}
+
 export interface ProviderContext {
   now(): number
+  effects?: Effects
   [key: string]: unknown
 }
 

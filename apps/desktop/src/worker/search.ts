@@ -4,6 +4,20 @@ import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
+  CalculatorProvider,
+  ColorProvider,
+  DEFAULT_QUICKLINKS,
+  DevProvider,
+  EmojiProvider,
+  ProcessProvider,
+  QuicklinkProvider,
+  SystemProvider,
+  TimerProvider,
+  TimerStore,
+  type Quicklink,
+  type TimerRec,
+} from '@beacon/providers'
+import {
   type Platform,
   discoverApps,
   watchRoots,
@@ -17,9 +31,32 @@ import {
 } from '@beacon/apps'
 import { Frecency, SearchEngine, attachSearchService, type FrecencyData } from '@beacon/core'
 import { JsonFile } from '@beacon/jsonstore'
-import type { ParsedQuery, Provider, ResultItem } from '@beacon/shared'
+import type { Effects, ParsedQuery, Provider, ResultItem } from '@beacon/shared'
 
 const parentPort = (process as unknown as { parentPort: Electron.ParentPort }).parentPort
+
+// Side effects (clipboard, browser, notifications) are performed by the main process.
+let rid = 0
+const waiting = new Map<number, (v: string) => void>()
+function effect(kind: string, payload: unknown, wantReply = false): Promise<string> {
+  const id = ++rid
+  parentPort.postMessage({ type: 'effect', kind, payload, rid: id })
+  return wantReply ? new Promise((res) => waiting.set(id, res)) : Promise.resolve('')
+}
+const effects: Effects = {
+  copy: async (text) => void (await effect('copy', text)),
+  openUrl: async (url) => void (await effect('openUrl', url)),
+  notify: async (title, body) => void (await effect('notify', { title, body })),
+  readClipboard: () => effect('readClipboard', null, true),
+}
+
+const quicklinkSchema = z.array(
+  z.object({ keyword: z.string().min(1), name: z.string(), url: z.string() }),
+)
+const timersSchema = z.array(
+  z.object({ id: z.string(), label: z.string(), endsAt: z.number(), startedAt: z.number() }),
+)
+const ratesSchema = z.record(z.number().positive())
 
 const frecencySchema = z.record(z.record(z.object({ v: z.number(), ts: z.number() })))
 
@@ -75,11 +112,49 @@ async function main(dataDir: string): Promise<void> {
     version: 1,
   })
   const frecency = new Frecency({}, await store.load())
-  const engine = new SearchEngine({ frecency, timeoutMs: 250 })
+  const engine = new SearchEngine({ frecency, timeoutMs: 250, ctx: { now: Date.now, effects } })
+
+  // User config (hand-editable JSON; invalid edits are quarantined, defaults used).
+  const linksFile = new JsonFile<Quicklink[]>({
+    path: join(dataDir, 'config/quicklinks.json'),
+    schema: quicklinkSchema,
+    defaults: () => DEFAULT_QUICKLINKS,
+  })
+  const ratesFile = new JsonFile<Record<string, number>>({
+    path: join(dataDir, 'config/rates.json'),
+    schema: ratesSchema,
+    defaults: () => ({}),
+  })
+  const timersFile = new JsonFile<TimerRec[]>({
+    path: join(dataDir, 'data/timers.json'),
+    schema: timersSchema,
+    defaults: () => [],
+  })
+  const timers = new TimerStore({
+    now: Date.now,
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout),
+    onFire: (t) => void effects.notify(t.label, 'Timer finished'),
+    onChange: (all) => void timersFile.set(all).catch(() => {}),
+  })
+  timers.restore(await timersFile.load())
+  const links = new QuicklinkProvider(await linksFile.load())
+  const rates = await ratesFile.load()
 
   const apps = new AppsProvider()
   engine.register(apps)
   engine.register(new RecentsProvider(apps, frecency))
+  for (const p of [
+    new CalculatorProvider(() => rates),
+    new ColorProvider(),
+    new DevProvider(),
+    new SystemProvider(),
+    links,
+    new EmojiProvider(),
+    new TimerProvider(timers),
+    new ProcessProvider(),
+  ])
+    engine.register(p)
 
   // Index apps in the background; search is usable (empty) immediately.
   const t0 = performance.now()
@@ -124,7 +199,12 @@ async function main(dataDir: string): Promise<void> {
 
   let detach: (() => void) | undefined
   parentPort.on('message', (e) => {
-    const m = e.data as { type?: string }
+    const m = e.data as { type?: string; rid?: number; value?: string }
+    if (m?.type === 'effect-result' && m.rid) {
+      waiting.get(m.rid)?.(m.value ?? '')
+      waiting.delete(m.rid)
+      return
+    }
     if (m?.type === 'port' && e.ports[0]) {
       detach?.()
       const port = e.ports[0]

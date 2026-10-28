@@ -17,6 +17,8 @@ interface State {
   selected: number
   actionsOpen: boolean
   actionIndex: number
+  confirm: { title: string; actionId?: string; index: number } | null
+  askConfirm(c: State['confirm']): void
   settings: BeaconSettings | null
   searching: boolean
   error: string | null
@@ -40,6 +42,8 @@ export const useStore = create<State>((set, get) => ({
   selected: 0,
   actionsOpen: false,
   actionIndex: 0,
+  confirm: null,
+  askConfirm: (c) => set({ confirm: c }),
   settings: null,
   searching: false,
   error: null,
@@ -69,6 +73,7 @@ export const useStore = create<State>((set, get) => ({
     const s = get()
     const item = s.items[index ?? s.selected]
     if (!item) return
+    set({ confirm: null, actionsOpen: false })
     post({
       type: 'activate',
       id: ++qid,
@@ -89,11 +94,7 @@ function onMessage(m: ServerMessage): void {
   if (m.type === 'batch' && m.id === activeQuery) {
     list.merge(m.items, s.items.length ? s.selected : -1)
     useStore.setState({ items: list.items })
-    if (!reported && m.items.length) {
-      reported = true
-      // keystroke → results committed to the screen
-      requestAnimationFrame(() => window.beacon.reportKeystroke(performance.now() - keyAt))
-    }
+    if (!reported && m.items.length) reported = true // reported from App's layout effect
   } else if (m.type === 'done' && m.id === activeQuery) {
     useStore.setState({ searching: false })
   } else if (m.type === 'activated') {
@@ -102,6 +103,15 @@ function onMessage(m: ServerMessage): void {
       useStore.getState().reset()
     } else useStore.setState({ error: m.error ?? 'Action failed' })
   }
+}
+
+/** Called after React commits results to the DOM: keystroke → commit, then → next painted frame. */
+let committedFor = 0
+export function markCommitted(): void {
+  if (!reported || committedFor === activeQuery) return
+  committedFor = activeQuery
+  const commit = performance.now() - keyAt
+  requestAnimationFrame(() => window.beacon.reportKeystroke(commit, performance.now() - keyAt))
 }
 
 export function initPort(): void {

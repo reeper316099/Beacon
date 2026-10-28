@@ -1,6 +1,9 @@
 import { join } from 'node:path'
 import {
   BrowserWindow,
+  Notification,
+  clipboard,
+  shell,
   Menu,
   MessageChannelMain,
   Tray,
@@ -41,9 +44,36 @@ const perf = {
   workerIndexed: null as null | { apps: number; ms: number },
   shown: [] as number[],
   keystroke: [] as number[],
+  keystrokePaint: [] as number[],
 }
 const hotkey = { ok: false, message: '', accelerator: '' }
 let lastHotkeyAt = 0
+
+/** Effects requested by the search worker. Only a fixed set of capabilities; URLs are scheme-checked. */
+function handleEffect(kind: string, payload: unknown, rid: number): void {
+  switch (kind) {
+    case 'copy':
+      if (typeof payload === 'string' && payload.length < 1_000_000) clipboard.writeText(payload)
+      break
+    case 'openUrl':
+      try {
+        const u = new URL(String(payload))
+        if (u.protocol === 'https:' || u.protocol === 'http:') void shell.openExternal(u.toString())
+      } catch {
+        /* ignore malformed URLs */
+      }
+      break
+    case 'notify': {
+      const p = payload as { title?: string; body?: string }
+      if (Notification.isSupported())
+        new Notification({ title: String(p.title ?? ''), body: String(p.body ?? '') }).show()
+      break
+    }
+    case 'readClipboard':
+      worker?.postMessage({ type: 'effect-result', rid, value: clipboard.readText() })
+      break
+  }
+}
 
 function pageUrl(hash = ''): { url?: string; file?: string; hash: string } {
   const dev = process.env['ELECTRON_RENDERER_URL']
@@ -175,6 +205,9 @@ function openSettings(): void {
 const p50 = (a: number[]) =>
   a.length ? [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)] : null
 
+const pct = (a: number[], q: number) =>
+  a.length ? [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * q))] : null
+
 function status() {
   return {
     app: APP_NAME,
@@ -191,7 +224,22 @@ function status() {
         p50: p50(perf.shown),
         last: perf.shown.at(-1) ?? null,
       },
-      keystrokeToPaintMs: { n: perf.keystroke.length, p50: p50(perf.keystroke) },
+      keystrokeToCommitMs: {
+        n: perf.keystroke.length,
+        p50: p50(perf.keystroke),
+        p95: pct(perf.keystroke, 0.95),
+      },
+      keystrokeToPaintMs: {
+        n: perf.keystrokePaint.length,
+        p50: p50(perf.keystrokePaint),
+        p95: pct(perf.keystrokePaint, 0.95),
+      },
+      processes: app.getAppMetrics().map((m) => ({
+        type: m.type,
+        name: m.name ?? '',
+        mb: Math.round(m.memory.workingSetSize / 1024),
+        privateMB: Math.round((m.memory.privateBytes ?? 0) / 1024),
+      })),
       rssMB: Math.round(
         app.getAppMetrics().reduce((s, m) => s + m.memory.workingSetSize, 0) / 1024,
       ),
@@ -218,9 +266,20 @@ if (!app.requestSingleInstanceLock()) {
     worker = utilityProcess.fork(join(__dirname, 'searchWorker.js'), [], {
       serviceName: 'beacon-search',
     })
-    worker.on('message', (m: { type?: string; apps?: number; ms?: number }) => {
-      if (m?.type === 'indexed') perf.workerIndexed = { apps: m.apps ?? 0, ms: m.ms ?? 0 }
-    })
+    worker.on(
+      'message',
+      (m: {
+        type?: string
+        apps?: number
+        ms?: number
+        kind?: string
+        payload?: unknown
+        rid?: number
+      }) => {
+        if (m?.type === 'effect') return void handleEffect(m.kind ?? '', m.payload, m.rid ?? 0)
+        if (m?.type === 'indexed') perf.workerIndexed = { apps: m.apps ?? 0, ms: m.ms ?? 0 }
+      },
+    )
     worker.postMessage({ type: 'init', dataDir })
 
     win = createWindow()
@@ -278,9 +337,13 @@ if (!app.requestSingleInstanceLock()) {
       if (lastHotkeyAt && t >= lastHotkeyAt) perf.shown.push(t - lastHotkeyAt)
       if (perf.shown.length > 200) perf.shown.shift()
     })
-    ipcMain.on('perf:keystroke', (_e, ms: number) => {
-      perf.keystroke.push(ms)
-      if (perf.keystroke.length > 500) perf.keystroke.shift()
+    ipcMain.on('perf:keystroke', (_e, commit: number, paint: number) => {
+      perf.keystroke.push(commit)
+      perf.keystrokePaint.push(paint)
+      if (perf.keystroke.length > 500) {
+        perf.keystroke.shift()
+        perf.keystrokePaint.shift()
+      }
     })
 
     perf.coldStartMs = Math.round(performance.now() - bootAt)
@@ -300,15 +363,47 @@ function runSmoke(): void {
     // Type into the launcher to exercise keystroke → paint, and capture a screenshot.
     showLauncher()
     await new Promise((r) => setTimeout(r, 400))
-    for (const q of ['s', 'sa', 'saf', 'safa']) {
+    for (const q of [
+      '',
+      'a',
+      'ap',
+      'app',
+      's',
+      'sa',
+      'saf',
+      'safa',
+      'c',
+      'ch',
+      'chr',
+      'chro',
+      'f',
+      'fi',
+      'fir',
+      'fire',
+      't',
+      'te',
+      'ter',
+      'term',
+      'x',
+      'xc',
+      'xco',
+      ...(process.env['BEACON_QUERY'] ? [process.env['BEACON_QUERY']] : []),
+    ]) {
       win?.webContents.executeJavaScript(
         `(() => { const i = document.querySelector('input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, ${JSON.stringify(q)}); i.dispatchEvent(new Event('input', { bubbles: true })) })()`,
       )
-      await new Promise((r) => setTimeout(r, 300))
+      await new Promise((r) => setTimeout(r, 120))
     }
     const shot = process.env['BEACON_SHOT']
     if (shot && win)
       (await import('node:fs')).writeFileSync(shot, (await win.webContents.capturePage()).toPNG())
+    console.log(
+      'BEACON_SAMPLES ' +
+        JSON.stringify({
+          commit: perf.keystroke.map((x) => +x.toFixed(1)),
+          paint: perf.keystrokePaint.map((x) => +x.toFixed(1)),
+        }),
+    )
     console.log('BEACON_SMOKE ' + JSON.stringify(status()))
     app.exit(0)
   }, 2500)

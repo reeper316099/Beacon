@@ -17,7 +17,8 @@ contextBridge.exposeInMainWorld('beacon', {
   getStatus: () => ipcRenderer.invoke('status:get'),
   getIcon: (path: string) => ipcRenderer.invoke('icon:get', path),
   reportShown: (t: number) => ipcRenderer.send('perf:shown', t),
-  reportKeystroke: (ms: number) => ipcRenderer.send('perf:keystroke', ms),
+  reportKeystroke: (commit: number, paint: number) =>
+    ipcRenderer.send('perf:keystroke', commit, paint),
   onShown: (cb: (info: { at: number }) => void) => on('shown', cb as never),
   onSettings: (cb: (s: unknown) => void) => on('settings', cb as never),
 })

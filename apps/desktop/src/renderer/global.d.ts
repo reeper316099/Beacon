@@ -17,7 +17,7 @@ export interface BeaconApi {
   getStatus(): Promise<Record<string, any>>
   getIcon(path: string): Promise<string | null>
   reportShown(t: number): void
-  reportKeystroke(ms: number): void
+  reportKeystroke(commitMs: number, paintMs: number): void
   onShown(cb: (info: { at: number }) => void): () => void
   onSettings(cb: (s: BeaconSettings) => void): () => void
 }

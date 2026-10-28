@@ -333,3 +333,15 @@ body:has(.settings) {
 .muted {
   color: var(--text-muted);
 }
+
+.icon.swatch {
+  border: 1px solid var(--border);
+}
+.confirm {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--sp-3) var(--sp-4);
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  border-top: 1px solid var(--danger);
+}

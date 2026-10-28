@@ -21,7 +21,8 @@
     "bench": "tsx packages/core/bench/bench.ts",
     "guard": "node scripts/guard.mjs",
     "dev": "npm run dev -w @beacon/desktop",
-    "build": "npm run build -w @beacon/desktop"
+    "build": "npm run build -w @beacon/desktop",
+    "measure:memory": "node scripts/measure-memory.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

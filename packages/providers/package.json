@@ -1,0 +1,17 @@
+{
+  "name": "@beacon/providers",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@beacon/core": "*",
+    "@beacon/jsonstore": "*",
+    "@beacon/matcher": "*",
+    "@beacon/shared": "*",
+    "mathjs": "^14.0.0"
+  }
+}
