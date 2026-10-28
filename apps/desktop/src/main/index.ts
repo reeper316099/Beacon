@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { parseWorkflow } from '@beacon/providers/workflows'
 import { isAbsolute, join } from 'node:path'
 import {
@@ -6,6 +6,7 @@ import {
   Notification,
   ClipboardItem,
   clipboard,
+  dialog,
   shell,
   Menu,
   MessageChannelMain,
@@ -18,6 +19,8 @@ import {
   type UtilityProcess,
 } from 'electron'
 import { APP_NAME } from '@beacon/shared'
+import { atomicWrite } from '@beacon/jsonstore'
+import { defaultDataDir, lorekeeper, cipherkeep, worldloom, classpad } from '@beacon/providers/hub'
 import { ExtensionManager } from './extensions'
 import { startApi } from './api'
 import { trayIcon } from './icon'
@@ -55,6 +58,13 @@ let settingsWin: BrowserWindow | null = null
 let tray: Tray | null = null
 let itemHotkeys: ItemHotkeys | null = null
 let extManager: ExtensionManager | null = null
+let providerList: { id: string; name: string; mode: string; triggers: string[] }[] = []
+let onboardingWin: BrowserWindow | null = null
+const E2E = !!process.env['BEACON_E2E']
+const e2eLog = (e: Record<string, unknown>) =>
+  void appendFile(join(dataDir, 'runtime/e2e-actions.jsonl'), JSON.stringify(e) + '\n').catch(
+    () => {},
+  )
 const headlessWaiters = new Map<number, (r: unknown) => void>()
 let headlessSeq = 0
 let worker: UtilityProcess | null = null
@@ -76,6 +86,9 @@ const DEEP_LINK_SCHEMES = new Set(['lorekeeper', 'cipherkeep', 'worldloom', 'cla
 
 /** Effects requested by the search worker. Only a fixed set of capabilities; URLs are scheme-checked. */
 function handleEffect(kind: string, payload: unknown, rid: number): void {
+  // End-to-end tests record "open" style effects instead of performing them.
+  if (E2E && ['openUrl', 'openPath', 'openDeepLink', 'reveal'].includes(kind))
+    return e2eLog({ kind, payload })
   switch (kind) {
     case 'copy':
       if (typeof payload === 'string' && payload.length < 1_000_000)
@@ -244,6 +257,7 @@ function showLauncher(): void {
   win.show()
   win.focus()
   win.webContents.send('shown', { at: lastHotkeyAt })
+  onboardingWin?.webContents.send('launcher-shown')
 }
 
 function hideLauncher(): void {
@@ -293,6 +307,42 @@ function registerHotkey(): void {
     : isWayland
       ? `Global shortcuts aren't available here (Wayland). Bind your desktop's shortcut settings to the command "beacon toggle". See docs/PLATFORMS.md.`
       : `"${accel}" couldn't be registered. Another app probably owns it; pick a different shortcut in Settings, or bind "beacon toggle" in your system shortcuts.`
+}
+
+function openOnboarding(): void {
+  if (onboardingWin && !onboardingWin.isDestroyed()) return void onboardingWin.focus()
+  onboardingWin = new BrowserWindow({
+    width: 680,
+    height: 640,
+    title: `Welcome to ${APP_NAME}`,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  })
+  onboardingWin.setMenuBarVisibility(false)
+  onboardingWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  onboardingWin.on('closed', () => (onboardingWin = null))
+  load(onboardingWin, 'onboarding')
+}
+
+async function readJson<T>(file: string, fallback: T): Promise<T> {
+  try {
+    return JSON.parse(await readFile(file, 'utf8')) as T
+  } catch {
+    return fallback
+  }
+}
+
+/** Merge a patch into a hand-editable config file (other keys are preserved). */
+async function patchJson(
+  file: string,
+  patch: (cur: Record<string, unknown>) => Record<string, unknown>,
+): Promise<void> {
+  const cur = await readJson<Record<string, unknown>>(file, {})
+  await atomicWrite(file, JSON.stringify(patch(cur), null, 2))
 }
 
 function openSettings(): void {
@@ -463,7 +513,10 @@ if (!app.requestSingleInstanceLock()) {
         n?: number
         result?: unknown
       }) => {
-        if (m?.type === 'ready') extManager?.publish()
+        if (m?.type === 'ready') {
+          providerList = (m as { providers?: typeof providerList }).providers ?? []
+          extManager?.publish()
+        }
         if (m?.type === 'scripts-running') setRunning(m.n ?? 0)
         if (m?.type === 'headless-result') {
           headlessWaiters.get(m.rid ?? -1)?.(m.result)
@@ -513,6 +566,7 @@ if (!app.requestSingleInstanceLock()) {
           },
         },
         { label: 'Settings…', click: openSettings },
+        { label: 'Run setup again…', click: openOnboarding },
         { type: 'separator' },
         { label: 'Quit', click: () => app.quit() },
       ])
@@ -588,6 +642,98 @@ if (!app.requestSingleInstanceLock()) {
       await extManager?.handle({ op: 'admin', admin: String(op), id })
       return true
     })
+    // ---- settings/onboarding: providers, files, integrations, first run ----
+    const HIDDEN_PROVIDERS = new Set([
+      'recents',
+      'pins',
+      'aliases',
+      'myapps',
+      'alias',
+      'hotkey',
+      'hub',
+      'extensions',
+    ])
+    const providersFile = join(dataDir, 'config/providers.json')
+    ipcMain.handle('providers:list', async () => {
+      const off = new Set(
+        (await readJson<{ disabled?: string[] }>(providersFile, {})).disabled ?? [],
+      )
+      return providerList
+        .filter((p) => !HIDDEN_PROVIDERS.has(p.id) && !p.id.startsWith('ext:'))
+        .map((p) => ({ ...p, enabled: !off.has(p.id) }))
+    })
+    ipcMain.handle('providers:set', async (_e, id: unknown, enabled: unknown) => {
+      if (typeof id !== 'string' || typeof enabled !== 'boolean') return false
+      await patchJson(providersFile, (cur) => {
+        const off = new Set((cur['disabled'] as string[] | undefined) ?? [])
+        if (enabled) off.delete(id)
+        else off.add(id)
+        return { ...cur, disabled: [...off] }
+      })
+      worker?.postMessage({ type: 'providers-reload' })
+      return true
+    })
+    const filesFile = join(dataDir, 'config/files.json')
+    ipcMain.handle(
+      'files:roots',
+      async () =>
+        (await readJson<{ roots?: string[] }>(filesFile, {})).roots ?? [app.getPath('home')],
+    )
+    ipcMain.handle('files:set-roots', async (_e, roots: unknown) => {
+      if (
+        !Array.isArray(roots) ||
+        roots.length > 20 ||
+        roots.some((r) => typeof r !== 'string' || !isAbsolute(r))
+      )
+        return false
+      await patchJson(filesFile, (cur) => ({ ...cur, roots }))
+      worker?.postMessage({ type: 'files-rebuild' })
+      return true
+    })
+    ipcMain.handle('dialog:pick-folder', async (e) => {
+      const parent = BrowserWindow.fromWebContents(e.sender)
+      const r = await (parent
+        ? dialog.showOpenDialog(parent, { properties: ['openDirectory'] })
+        : dialog.showOpenDialog({ properties: ['openDirectory'] }))
+      return r.canceled ? null : (r.filePaths[0] ?? null)
+    })
+    const intFile = join(dataDir, 'config/integrations.json')
+    ipcMain.handle('integrations:detect', async () => {
+      const cfg = await readJson<Record<string, { enabled?: boolean }>>(intFile, {})
+      const out: { id: string; name: string; found: boolean; enabled: boolean }[] = []
+      for (const a of [lorekeeper, cipherkeep, worldloom, classpad]) {
+        const dir = defaultDataDir(a.dataDirEnv, a.folderName)
+        const found = await readdir(dir).then(
+          () => true,
+          () => false,
+        )
+        out.push({ id: a.id, name: a.name, found, enabled: !!cfg[a.id]?.enabled })
+      }
+      return out
+    })
+    ipcMain.handle('integrations:set', async (_e, id: unknown, enabled: unknown) => {
+      if (
+        typeof id !== 'string' ||
+        typeof enabled !== 'boolean' ||
+        !['lorekeeper', 'cipherkeep', 'worldloom', 'classpad'].includes(id)
+      )
+        return false
+      await patchJson(intFile, (cur) => ({
+        ...cur,
+        [id]: { deepLinks: false, showSpoilers: false, ...((cur[id] as object) ?? {}), enabled },
+      }))
+      worker?.postMessage({ type: 'integrations-reload' })
+      return true
+    })
+    ipcMain.handle('onboarding:done', async () => {
+      const next = SettingsSchema.parse({ ...settings, onboarded: true })
+      await store.set(next)
+      settings = next
+      broadcastSettings()
+      onboardingWin?.close()
+      return true
+    })
+    ipcMain.on('onboarding:open', openOnboarding)
     ipcMain.handle('scripts:open-folder', () => shell.openPath(join(dataDir, 'scripts')))
 
     ipcMain.on('hide', hideLauncher)
@@ -626,6 +772,7 @@ if (!app.requestSingleInstanceLock()) {
       if (perf.shown.length > 200) perf.shown.shift()
     })
     ipcMain.on('perf:keystroke', (_e, commit: number, paint: number) => {
+      onboardingWin?.webContents.send('launcher-typed')
       perf.keystroke.push(commit)
       perf.keystrokePaint.push(paint)
       if (perf.keystroke.length > 500) {
@@ -634,6 +781,7 @@ if (!app.requestSingleInstanceLock()) {
       }
     })
 
+    if (!settings.onboarded && !process.env['BEACON_SMOKE']) openOnboarding()
     perf.coldStartMs = Math.round(performance.now() - bootAt)
     if (process.env['BEACON_SMOKE']) runSmoke()
   })

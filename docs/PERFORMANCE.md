@@ -26,3 +26,16 @@ Idle memory is measured as physical footprint (macOS `footprint`, Linux Pss, Win
 - Search over the index is memory-lean (`searchLean`, no per-item prepared state) and time-boxed to 60 ms, so a huge index never blocks the worker. Cost: ~12 ms p50 / 30 ms max per query at 50k synthetic names (`npx tsx packages/core/bench/lean.ts`), slower than the prepared apps index (11 ms p95 at 50k) — file results arrive after fast providers, they never delay them.
 - Idle footprint on macOS with a 100k-file index: ≈ 198 MB (≈ 179 MB with no file index). Memory grows roughly 0.2 MB per 1k files.
 - The global (no-trigger) file search needs ≥ 3 characters; `f <text>` searches from 1.
+
+## M9 measurements (packaged app, macOS arm64, Playwright)
+
+From `npx playwright test` against `electron-builder --dir` output (synthetic 3-app fixture, tiny file root, so cold start is best-case):
+
+| Metric                                                   | Target       | Measured                                                    |
+| -------------------------------------------------------- | ------------ | ----------------------------------------------------------- |
+| Hotkey-equivalent → visible (API `show`, n=15)           | < 60 ms warm | p50 ≈ 22–24 ms                                              |
+| Cold start → tray-resident                               | < 2 s        | ≈ 0.2–0.35 s (fixture); ≈ 0.7–0.9 s with real app discovery |
+| Idle memory (footprint, 100k-file index + all providers) | < ~200 MB    | ≈ 205 MB                                                    |
+
+- CI runs the same e2e on Windows, Linux (xvfb) and macOS for every push; the **nightly** workflow enforces the budgets (`BEACON_BUDGET_SHOW_MS=60`, bench p95 < 16 ms) so noisy shared runners can't flake normal builds. Windows/Linux numbers will appear in the nightly job logs; none were measured locally.
+- Accessibility: axe-core runs in e2e on the launcher and Settings (0 violations at the time of writing).

@@ -121,6 +121,16 @@ describe('StableList', () => {
     l.merge([item('late', 100)], 0) // selected row 0 = 'a'
     expect(l.items.map((i) => i.id)).toEqual(['a', 'late', 'b'])
   })
+  it('a higher-scored duplicate upgrades the row in place without moving anything', () => {
+    const l = new StableList()
+    l.merge([item('a', 10), item('b', 5)], -1)
+    const better = { ...item('a', 50), subtitle: 'alias' }
+    l.merge([better], 0)
+    expect(l.items.map((i) => i.id)).toEqual(['a', 'b'])
+    expect(l.items[0]?.subtitle).toBe('alias')
+    l.merge([item('b', 1)], 0) // lower score duplicate: ignored
+    expect(l.items[1]?.score).toBe(5)
+  })
   it('dedupes', () => {
     const l = new StableList()
     l.merge([item('a', 1)], -1)

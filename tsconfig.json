@@ -20,6 +20,7 @@
     "packages/*/bench",
     "apps/*/src",
     "apps/*/test",
-    "apps/*/cli"
+    "apps/*/cli",
+    "e2e"
   ]
 }

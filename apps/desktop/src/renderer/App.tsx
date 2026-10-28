@@ -7,6 +7,35 @@ import { ScriptPanel } from './ScriptPanel'
 import { markCommitted, useStore } from './store'
 import { applyTheme } from './theme'
 
+/** Fallback glyphs by result kind (no bundled artwork; emoji come from the system font). */
+const KIND_ICON: Record<string, string> = {
+  calc: '🧮',
+  timer: '⏱️',
+  dev: '🛠️',
+  web: '🌐',
+  system: '⚙️',
+  clipboard: '📋',
+  snippet: '✂️',
+  note: '📝',
+  todo: '☑️',
+  process: '🖥️',
+  ssh: '🔐',
+  bookmark: '🔖',
+  file: '📄',
+  folder: '📁',
+  script: '▶️',
+  workflow: '🔁',
+  extension: '🧩',
+  integration: '🔗',
+  alias: '↪️',
+  command: '⌨️',
+  concept: '💡',
+  lab: '🧪',
+  assignment: '📚',
+  task: '☑️',
+  emoji: '🙂',
+}
+
 const ROW = 48
 const VISIBLE = 8
 
@@ -39,6 +68,13 @@ function Icon({ item }: { item: ResultItem }) {
   if (item.icon?.startsWith('color:'))
     return <span className="icon swatch" style={{ background: item.icon.slice(6) }} aria-hidden />
   if (src) return <img className="icon" src={src} alt="" draggable={false} />
+  const glyph = KIND_ICON[item.kind]
+  if (glyph)
+    return (
+      <span className="icon emoji" aria-hidden>
+        {glyph}
+      </span>
+    )
   return (
     <span className="icon letter" style={{ ['--h' as string]: hue(item.title) }} aria-hidden>
       {item.title.slice(0, 1).toUpperCase()}
@@ -176,7 +212,8 @@ export function App() {
 
   return (
     <div className="shell" onKeyDown={onKeyDown}>
-      <div className="panel">
+      <main className="panel">
+        <h1 className="sr-only">Beacon</h1>
         <div className="search">
           <svg className="glass-ic" viewBox="0 0 20 20" aria-hidden>
             <circle cx="9" cy="9" r="5.5" />
@@ -311,7 +348,7 @@ export function App() {
             <kbd>Esc</kbd> {s.query ? 'Clear' : 'Close'}
           </span>
         </footer>
-      </div>
+      </main>
     </div>
   )
 }

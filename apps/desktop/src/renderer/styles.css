@@ -617,3 +617,87 @@ body:has(.settings) {
 .footer[hidden] {
   display: none;
 }
+
+/* onboarding */
+.onboarding {
+  max-width: 680px;
+  margin: 0 auto;
+}
+.steps {
+  display: flex;
+  gap: var(--sp-2);
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--sp-4);
+  flex-wrap: wrap;
+}
+.steps li {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.steps li.on {
+  background: var(--gradient-primary);
+  color: #fff;
+}
+.steps li.done {
+  color: var(--success);
+}
+.onboarding .nav {
+  margin-top: var(--sp-4);
+}
+.onboarding .list {
+  list-style: none;
+  padding: 0;
+}
+.onboarding .list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 var(--sp-4);
+}
+.note {
+  padding: var(--sp-3);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  margin: var(--sp-3) 0;
+}
+.tour li {
+  margin: var(--sp-2) 0;
+  list-style: none;
+}
+.tour {
+  padding: 0;
+}
+.tour li.ok {
+  color: var(--success);
+}
+.ok {
+  color: var(--success);
+}
+button.primary {
+  background: var(--gradient-primary);
+  color: #fff;
+  border: 0;
+}
+/* high contrast */
+:root[data-contrast='1'] {
+  --border: currentColor;
+  --text-muted: var(--text);
+  --surface-2: rgba(128, 128, 128, 0.25);
+}
+:root[data-contrast='1'] .row.sel {
+  outline: 2px solid var(--text);
+  box-shadow: none;
+}
+:root[data-contrast='1'] mark,
+:root[data-contrast='1'] .title mark {
+  text-decoration: underline;
+}

@@ -321,3 +321,37 @@ export function ScriptsSection() {
     </section>
   )
 }
+
+export function ProvidersSection() {
+  const [list, setList] = useState<Awaited<ReturnType<typeof window.beacon.listProviders>>>([])
+  useEffect(() => void window.beacon.listProviders().then(setList), [])
+  return (
+    <section>
+      <h2>Providers</h2>
+      <p className="muted">
+        Switch features on or off. Triggers are the prefixes that focus a provider (for example{' '}
+        <code>cb </code> for clipboard history).
+      </p>
+      <div className="grid">
+        {list.map((p) => (
+          <label key={p.id} className="check">
+            <input
+              type="checkbox"
+              checked={p.enabled}
+              onChange={(e) => {
+                setList(list.map((x) => (x.id === p.id ? { ...x, enabled: e.target.checked } : x)))
+                void window.beacon.setProvider(p.id, e.target.checked)
+              }}
+            />
+            <span>
+              {p.name}
+              {p.triggers[0] ? (
+                <small className="muted"> · {p.triggers.map((t) => t.trim()).join(', ')}</small>
+              ) : null}
+            </span>
+          </label>
+        ))}
+      </div>
+    </section>
+  )
+}

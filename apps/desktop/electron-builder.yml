@@ -1,0 +1,59 @@
+appId: app.beacon.launcher
+productName: Beacon
+copyright: Copyright © 2026 Beacon contributors
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+extraResources:
+  - from: cli
+    to: cli
+asar: true
+npmRebuild: false
+publish: null # no auto-update and no network calls in v1
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+protocols:
+  - name: Beacon
+    schemes: [beacon]
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: universal
+  # Unsigned builds: no identity, no hardened runtime. See docs/PLATFORMS.md for adding signing/notarization.
+  identity: null
+  extendInfo:
+    LSUIElement: true # menu-bar app: no Dock icon
+    NSAppleEventsUsageDescription: Beacon uses AppleScript only for the actions you trigger (e.g. lock, sleep, open Terminal).
+dmg:
+  title: ${productName} ${version}
+
+win:
+  target:
+    - target: nsis
+      arch: x64
+    - target: portable
+      arch: x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
+linux:
+  category: Utility
+  target:
+    - AppImage
+    - deb
+    - rpm
+  maintainer: Beacon contributors <noreply@users.noreply.github.com>
+  executableName: beacon
+  synopsis: Local-first keyboard command bar
+  mimeTypes:
+    - x-scheme-handler/beacon
+  desktop:
+    entry:
+      StartupWMClass: Beacon

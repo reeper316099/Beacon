@@ -101,6 +101,8 @@ const parentPort = (process as unknown as { parentPort: Electron.ParentPort }).p
 
 // Side effects (clipboard, browser, notifications) are performed by the main process.
 let clip: ClipboardStore | undefined
+let applyProviderConfig: (() => Promise<void>) | undefined
+let reloadIntegrations: (() => Promise<void>) | undefined
 let reloadAll: (() => Promise<void>) | undefined
 let headlessRun: ((ref: string, args: string[]) => Promise<unknown>) | undefined
 let syncExtensions: ((list: ExtInfo[]) => void) | undefined
@@ -368,14 +370,19 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
     () => ({}),
   )
   await intFile.load()
+  reloadIntegrations = async () => {
+    await intFile.load()
+    await Promise.all([...hubProviders.values()].map((p) => p.reload()))
+  }
   const adapters = [lorekeeper, cipherkeep, worldloom, classpad]
   const hubProviders = new Map(adapters.map((a) => [a.id, new HubSourceProvider(a, intFile)]))
   const MY_APPS = new Set(adapters.map((a) => a.name.toLowerCase()))
 
   // Files: configurable source; the built-in index is crawled in the background, throttled and cancellable.
-  const filesCfg = await file<FilesConfig>('config/files.json', filesConfigSchema as never, () =>
+  const filesFile = file<FilesConfig>('config/files.json', filesConfigSchema as never, () =>
     filesConfigSchema.parse({}),
-  ).load()
+  )
+  let filesCfg = await filesFile.load()
   const termCfg = await file<TerminalConfig>(
     'config/terminal.json',
     terminalSchema as never,
@@ -387,10 +394,7 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
   await bmFile.load()
   const fileIndex = new FileIndex()
   const snapshot = join(cacheDir, 'file-index/index.txt')
-  const ignore = makeIgnore(
-    [...DEFAULT_IGNORE_NAMES, ...filesCfg.ignoreNames],
-    filesCfg.ignoreGlobs,
-  )
+  let ignore = makeIgnore([...DEFAULT_IGNORE_NAMES, ...filesCfg.ignoreNames], filesCfg.ignoreGlobs)
   const reportFiles = () =>
     parentPort.postMessage({
       type: 'files',
@@ -444,9 +448,26 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
       setInterval(() => void rebuildFiles(), 30 * 60_000).unref()
     })
   }
-  rebuildFilesHook = rebuildFiles
+  // Settings/onboarding change the roots in config/files.json, then ask for a rebuild.
+  rebuildFilesHook = async () => {
+    filesCfg = await filesFile.load()
+    ignore = makeIgnore([...DEFAULT_IGNORE_NAMES, ...filesCfg.ignoreNames], filesCfg.ignoreGlobs)
+    await rebuildFiles()
+  }
   dbg('files set up')
   engine.register(new RecentsProvider(apps, frecency))
+  // Per-provider switches (config/providers.json, edited from Settings/onboarding or by hand).
+  const providersFile = file<{ disabled: string[] }>(
+    'config/providers.json',
+    z.object({ disabled: z.array(z.string()).default([]) }) as never,
+    () => ({ disabled: [] }),
+  )
+  await providersFile.load()
+  engine.opts.disabled = new Set(providersFile.data.disabled)
+  applyProviderConfig = async () => {
+    await providersFile.load()
+    engine.opts.disabled = new Set(providersFile.data.disabled)
+  }
   // ---- scripts, workflows, extensions (M8) ----
   const scriptsCfg = file<ScriptsConfig>(
     'config/scripts.json',
@@ -623,7 +644,17 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
       '-Command',
       'Get-StartApps | ConvertTo-Json',
     ])
-  void discoverApps(plat, { convertPlist, getStartApps }).then(async (list) => {
+  const fixture = process.env['BEACON_APPS_FIXTURE']
+  void (
+    fixture
+      ? import('node:fs/promises').then(
+          async (fs) =>
+            JSON.parse(await fs.readFile(fixture, 'utf8')) as Awaited<
+              ReturnType<typeof discoverApps>
+            >,
+        )
+      : discoverApps(plat, { convertPlist, getStartApps })
+  ).then(async (list) => {
     apps.setAll(list)
     parentPort.postMessage({
       type: 'indexed',
@@ -643,7 +674,7 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
           : await discoverLinux({ dirs: [root] })
     apps.replaceSource(root, list)
   }
-  watchRoots(roots, (r) => void rescan(r))
+  if (!process.env['BEACON_APPS_FIXTURE']) watchRoots(roots, (r) => void rescan(r))
 
   let last = ''
   setInterval(() => {
@@ -671,6 +702,8 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
       args?: string[]
     }
     if (m?.type === 'files-rebuild') void rebuildFilesHook?.()
+    else if (m?.type === 'providers-reload') void applyProviderConfig?.()
+    else if (m?.type === 'integrations-reload') void reloadIntegrations?.()
     else if (m?.type === 'reload-all') void reloadAll?.()
     else if (m?.type === 'ext-list' && m.list) syncExtensions?.(m.list)
     else if (m?.type === 'headless-run' && m.rid)
@@ -718,7 +751,7 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
   })
   dbg('ready')
   setTimeout(() => dbg('after 20s'), 20000).unref()
-  parentPort.postMessage({ type: 'ready' })
+  parentPort.postMessage({ type: 'ready', providers: engine.list() })
 }
 
 parentPort.once('message', (e) => {

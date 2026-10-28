@@ -1,7 +1,7 @@
 {
   "name": "beacon-monorepo",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
   "type": "module",
   "workspaces": [
@@ -22,10 +22,16 @@
     "guard": "node scripts/guard.mjs",
     "dev": "npm run dev -w @beacon/desktop",
     "build": "npm run build -w @beacon/desktop",
-    "measure:memory": "node scripts/measure-memory.mjs"
+    "measure:memory": "node scripts/measure-memory.mjs",
+    "dist": "npm run dist -w @beacon/desktop",
+    "icon": "node scripts/make-icon.mjs",
+    "e2e": "playwright test",
+    "pack": "npm run icon && npm run build -w @beacon/desktop && npm run pack -w @beacon/desktop"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@eslint/js": "^9.0.0",
+    "@playwright/test": "^1.64.1",
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
     "fast-check": "^4.0.0",

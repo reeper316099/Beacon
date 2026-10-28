@@ -44,6 +44,8 @@ export interface ScriptRun {
 let port: MessagePort | null = null
 let qid = 0
 let activeQuery = 0
+/** Query text at the time each activation was sent, so a late reply can't wipe a newer query. */
+const activations = new Map<number, string>()
 let keyAt = 0
 let reported = false
 const list = new StableList()
@@ -135,9 +137,11 @@ export const useStore = create<State>((set, get) => ({
     const item = s.items[index ?? s.selected]
     if (!item) return
     set({ confirm: null, actionsOpen: false })
+    const aid = ++qid
+    activations.set(aid, s.query)
     post({
       type: 'activate',
-      id: ++qid,
+      id: aid,
       providerId: item.providerId,
       itemId: item.id,
       query: s.query,
@@ -338,9 +342,14 @@ function onMessage(m: ServerMessage): void {
   } else if (m.type === 'pinned') {
     flash(m.pinned ? 'Pinned' : 'Unpinned (or not pinnable)')
   } else if (m.type === 'activated') {
+    const sentFor = activations.get(m.id)
+    activations.delete(m.id)
     if (m.ok) {
-      window.beacon.hide()
-      useStore.getState().reset()
+      // If the user has already summoned Beacon again and typed something else, leave it alone.
+      if (sentFor === undefined || sentFor === useStore.getState().query) {
+        window.beacon.hide()
+        useStore.getState().reset()
+      }
     } else useStore.setState({ error: m.error ?? 'Action failed' })
   }
 }

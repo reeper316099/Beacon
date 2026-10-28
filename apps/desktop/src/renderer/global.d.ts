@@ -5,11 +5,26 @@ export interface BeaconSettings {
   accent: string
   glass: boolean
   launchAtLogin: boolean
+  highContrast: boolean
+  onboarded: boolean
   display: 'cursor' | 'primary'
 }
 export interface BeaconApi {
   hide(): void
   rebuildFiles(): void
+  listProviders(): Promise<
+    { id: string; name: string; mode: string; triggers: string[]; enabled: boolean }[]
+  >
+  setProvider(id: string, enabled: boolean): Promise<boolean>
+  getFileRoots(): Promise<string[]>
+  setFileRoots(roots: string[]): Promise<boolean>
+  pickFolder(): Promise<string | null>
+  detectIntegrations(): Promise<{ id: string; name: string; found: boolean; enabled: boolean }[]>
+  setIntegration(id: string, enabled: boolean): Promise<boolean>
+  finishOnboarding(): Promise<boolean>
+  openOnboarding(): void
+  onLauncherShown(cb: () => void): () => void
+  onLauncherTyped(cb: () => void): () => void
   listWorkflows(): Promise<
     { file: string; raw: string; ok: boolean; error?: string; name?: string; keyword?: string }[]
   >

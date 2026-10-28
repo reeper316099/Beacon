@@ -35,6 +35,16 @@ export class SearchEngine {
     this.providers.set(p.id, p)
   }
 
+  /** Registered providers (for settings/onboarding toggles). */
+  list(): { id: string; name: string; mode: string; triggers: string[] }[] {
+    return [...this.providers.values()].map((p) => ({
+      id: p.id,
+      name: p.name,
+      mode: p.mode,
+      triggers: p.triggers ?? [],
+    }))
+  }
+
   unregister(id: string): void {
     this.providers.delete(id)
   }

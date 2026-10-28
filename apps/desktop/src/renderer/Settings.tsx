@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import type { BeaconSettings } from './global'
 import { applyTheme } from './theme'
-import { ExtensionsSection, ScriptsSection, WorkflowsSection } from './SettingsExtras'
+import {
+  ExtensionsSection,
+  ProvidersSection,
+  ScriptsSection,
+  WorkflowsSection,
+} from './SettingsExtras'
 
 export function Settings() {
   const [s, setS] = useState<BeaconSettings | null>(null)
@@ -83,12 +88,21 @@ export function Settings() {
         <label className="check">
           <input
             type="checkbox"
+            checked={s.highContrast}
+            onChange={(e) => patch({ highContrast: e.target.checked })}
+          />
+          High contrast
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
             checked={s.glass}
             onChange={(e) => patch({ glass: e.target.checked })}
           />
           Glass effect (applies after restart; solid surface when unsupported)
         </label>
       </section>
+      <ProvidersSection />
       <ScriptsSection />
       <WorkflowsSection />
       <ExtensionsSection />
@@ -124,6 +138,9 @@ export function Settings() {
             <li>Memory (all processes): {perf.rssMB} MB</li>
           </ul>
         )}
+        <p>
+          <button onClick={() => window.beacon.openOnboarding()}>Run setup again…</button>
+        </p>
         <p className="muted">No telemetry. No network calls. Everything stays on this machine.</p>
       </section>
     </main>

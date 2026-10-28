@@ -1,0 +1,61 @@
+name: Nightly performance
+# Budgets are enforced here (not on every PR) so shared-runner noise can't flake normal builds.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  perf:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {
+              os: ubuntu-latest,
+              bin: apps/desktop/release/linux-unpacked/beacon,
+              pack: '--linux --dir',
+            }
+          - {
+              os: macos-latest,
+              bin: apps/desktop/release/mac-arm64/Beacon.app/Contents/MacOS/Beacon,
+              pack: '--mac --arm64 --dir -c.mac.target=dir',
+            }
+          - {
+              os: windows-latest,
+              bin: apps/desktop/release/win-unpacked/Beacon.exe,
+              pack: '--win --dir',
+            }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Query latency (50k items, p95 < 16 ms)
+        run: npm run bench
+        env:
+          BEACON_ENFORCE_BUDGET: '1'
+      - run: npm run icon
+      - run: npm run build
+      - run: npx electron-builder ${{ matrix.pack }}
+        working-directory: apps/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Hotkey → visible budget (p50 < 60 ms)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a --server-args="-screen 0 1280x1024x24" npx playwright test -g performance
+        env:
+          BEACON_E2E_BIN: ${{ github.workspace }}/${{ matrix.bin }}
+          BEACON_BUDGET_SHOW_MS: '60'
+      - name: Hotkey → visible budget (p50 < 60 ms)
+        if: runner.os != 'Linux'
+        run: npx playwright test -g performance
+        env:
+          BEACON_E2E_BIN: ${{ github.workspace }}/${{ matrix.bin }}
+          BEACON_BUDGET_SHOW_MS: '60'
+      - name: Idle memory (report)
+        run: node scripts/measure-memory.mjs
+        continue-on-error: true

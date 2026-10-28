@@ -9,7 +9,8 @@
     "./files": "./src/files.ts",
     "./workflows": "./src/workflows.ts",
     "./extensions": "./src/extensions/index.ts",
-    "./extensions/sandbox": "./src/extensions/sandbox-entry.ts"
+    "./extensions/sandbox": "./src/extensions/sandbox-entry.ts",
+    "./hub": "./src/hub/index.ts"
   },
   "dependencies": {
     "@beacon/core": "*",

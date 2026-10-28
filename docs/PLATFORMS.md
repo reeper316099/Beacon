@@ -42,3 +42,21 @@ Opt-in per profile via `bm ` (nothing is read until you enable a profile). Chrom
 ## SSH
 
 `ssh ` lists hosts from `~/.ssh/config` (Include supported; wildcard hosts ignored). Connecting opens a terminal with `ssh <alias>` (argv; on macOS via Terminal + AppleScript with the alias strictly validated). Set `config/terminal.json` → `{"command": ["kitty"]}` to use another terminal. Private keys are never read.
+
+## Installing (unsigned builds)
+
+Release builds are **not code-signed** yet. Expect these one-time prompts:
+
+- **Windows**: SmartScreen shows "Windows protected your PC" → _More info_ → _Run anyway_. Antivirus products occasionally flag unsigned Electron apps; the build is reproducible from source and SHA-256 sums are published with each release.
+- **macOS**: Gatekeeper blocks the first launch. Right-click the app → _Open_, or run `xattr -dr com.apple.quarantine /Applications/Beacon.app`. Beacon is a menu-bar app (no Dock icon). macOS may ask for Accessibility permission only if you enable optional features that need it (paste-to-previous-app is not enabled in v0.1).
+- **Linux**: AppImage needs `chmod +x`; `.deb`/`.rpm` install normally. On Wayland follow the shortcut section above.
+
+### Adding signing later
+
+- **Windows**: set `CSC_LINK` (a .pfx, base64) and `CSC_KEY_PASSWORD` as repository secrets and remove `CSC_IDENTITY_AUTO_DISCOVERY: false` in `.github/workflows/release.yml`; electron-builder signs NSIS + portable.
+- **macOS**: remove `identity: null` and set `hardenedRuntime: true` in `apps/desktop/electron-builder.yml`, add `CSC_LINK`/`CSC_KEY_PASSWORD` (Developer ID Application certificate) and notarization secrets (`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`), and add `notarize: true` under `mac:`.
+- **Linux**: optionally GPG-sign the checksums file.
+
+## Launch at login and tray
+
+Tray / menu-bar icon: Show, Pause clipboard history, Settings, Run setup again, Quit. "Launch at login" is a setting; macOS may refuse it for unsigned apps (harmless, logged once).
