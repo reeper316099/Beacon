@@ -31,5 +31,5 @@ Node 22+. No native modules are used; keep it that way (they wreck cross-OS pack
 ## Releasing
 
 1. Update `docs/RELEASE_NOTES.md` and the version in `package.json` / `apps/desktop/package.json`.
-2. `git tag v0.1.0 && git push --tags`. The **Release** workflow builds Windows (NSIS + portable), macOS (universal dmg) and Linux (AppImage, deb, rpm), then publishes a GitHub release with SHA-256 sums. Builds are **unsigned** (see `docs/PLATFORMS.md`).
+2. `git tag v1.0.3 && git push --tags`. The **Release** workflow builds Windows (NSIS + portable), macOS (universal dmg) and Linux (AppImage, deb, rpm), then publishes a GitHub release with SHA-256 sums. Builds are **unsigned** (see `docs/PLATFORMS.md`).
 3. The **Nightly** workflow enforces the performance budgets (`docs/PERFORMANCE.md`).

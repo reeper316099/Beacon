@@ -1,4 +1,4 @@
-# Beacon v0.1.0 (first release)
+# Beacon v1.0.3 (first release)
 
 A local-first, keyboard-first command bar for Windows, macOS and Linux. No telemetry, no accounts, no network calls. **Builds are unsigned**: see "Installing (unsigned builds)" in `docs/PLATFORMS.md`.
 
