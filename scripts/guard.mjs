@@ -14,6 +14,18 @@ const patterns = [
   [/\bghp_[A-Za-z0-9]{36}\b/, 'GitHub token'],
 ]
 
+// Optional local deny-list (never committed): one case-insensitive string per line, e.g. your
+// username or email. Lives in .git/ so it is not part of the repo.
+let deny = []
+try {
+  deny = readFileSync('.git/guard-deny.txt', 'utf8')
+    .split('\n')
+    .map((l) => l.trim().toLowerCase())
+    .filter(Boolean)
+} catch {
+  /* no local deny-list */
+}
+
 let failed = false
 for (const f of files) {
   if (f.startsWith('private-fixtures/') && f !== 'private-fixtures/.gitkeep') {
@@ -29,6 +41,12 @@ for (const f of files) {
     continue
   }
   if (text.includes('\0')) continue
+  for (const word of deny) {
+    if (text.toLowerCase().includes(word)) {
+      console.error(`guard: local deny-list term in ${f}`)
+      failed = true
+    }
+  }
   for (const [re, label] of patterns) {
     if (re.test(text)) {
       console.error(`guard: ${label} in ${f}`)

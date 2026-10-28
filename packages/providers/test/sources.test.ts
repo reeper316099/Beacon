@@ -239,10 +239,10 @@ describe('ssh', () => {
       args: [],
       cwd: '/tmp/a b',
     })
-    expect(terminalHere('darwin', '/Users/x/My Dir').args).toEqual([
+    expect(terminalHere('darwin', '/Users/example/My Dir').args).toEqual([
       '-a',
       'Terminal',
-      '/Users/x/My Dir',
+      '/Users/example/My Dir',
     ])
   })
   it('provider lists hosts and refuses unknown aliases', async () => {
