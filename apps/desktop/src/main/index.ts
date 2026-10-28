@@ -67,6 +67,8 @@ const perf = {
 const hotkey = { ok: false, message: '', accelerator: '' }
 let lastHotkeyAt = 0
 
+const DEEP_LINK_SCHEMES = new Set(['lorekeeper', 'cipherkeep', 'worldloom', 'classpad'])
+
 /** Effects requested by the search worker. Only a fixed set of capabilities; URLs are scheme-checked. */
 function handleEffect(kind: string, payload: unknown, rid: number): void {
   switch (kind) {
@@ -88,6 +90,16 @@ function handleEffect(kind: string, payload: unknown, rid: number): void {
         new Notification({ title: String(p.title ?? ''), body: String(p.body ?? '') }).show()
       break
     }
+    case 'openDeepLink':
+      // Only the user's own app schemes; never arbitrary URLs.
+      try {
+        const u = new URL(String(payload))
+        if (DEEP_LINK_SCHEMES.has(u.protocol.replace(':', '')))
+          void shell.openExternal(u.toString())
+      } catch {
+        /* ignore malformed */
+      }
+      break
     case 'openPath':
       if (typeof payload === 'string' && isAbsolute(payload)) void shell.openPath(payload)
       break
@@ -223,6 +235,25 @@ function hideLauncher(): void {
   if (process.platform === 'darwin') app.hide()
 }
 
+/** beacon://toggle | show | hide | query?q=text  (opened by other apps, scripts or the OS). */
+function handleBeaconUrl(raw: string): void {
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return
+  }
+  if (u.protocol !== 'beacon:') return
+  const action = u.hostname || u.pathname.replace(/^\/+/, '')
+  if (action === 'toggle') toggleLauncher()
+  else if (action === 'hide') hideLauncher()
+  else if (action === 'show' || action === 'query') {
+    showLauncher()
+    const q = u.searchParams.get('q')
+    if (action === 'query' && q !== null) win?.webContents.send('set-query', q.slice(0, 500))
+  }
+}
+
 function toggleLauncher(): void {
   if (win?.isVisible() && win.isFocused()) hideLauncher()
   else showLauncher()
@@ -317,12 +348,22 @@ function broadcastSettings(): void {
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', showLauncher)
+  app.on('second-instance', (_e, argv) => {
+    const url = argv.find((a) => a.startsWith('beacon://'))
+    if (url) handleBeaconUrl(url)
+    else showLauncher()
+  })
+  app.on('open-url', (e, url) => {
+    e.preventDefault()
+    handleBeaconUrl(url)
+  })
   app.on('window-all-closed', () => {}) // tray-resident
   app.on('will-quit', () => globalShortcut.unregisterAll())
 
   void app.whenReady().then(async () => {
     if (process.platform === 'darwin') app.dock?.hide()
+    // Works in packaged builds; in dev the OS can't map the scheme to the dev binary.
+    app.setAsDefaultProtocolClient('beacon')
     settings = await store.load()
     app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin })
 

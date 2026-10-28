@@ -229,6 +229,7 @@ describe('provider integration', () => {
     readClipboard: async () => '{"a":1}',
     copyImage: async () => {},
     openPath: async () => {},
+    openDeepLink: async () => {},
     reveal: async () => {},
     bindHotkey: async () => {},
   }

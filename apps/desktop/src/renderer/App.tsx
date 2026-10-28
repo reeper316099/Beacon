@@ -64,8 +64,10 @@ export function App() {
       )
       void at
     })
+    const offQ = window.beacon.onSetQuery((q) => useStore.getState().setQuery(q))
     s.reset()
     return () => {
+      offQ()
       offS()
       offShown()
     }

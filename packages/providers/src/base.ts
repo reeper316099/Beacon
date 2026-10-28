@@ -126,6 +126,9 @@ export async function runAction(
       if (!fx || typeof p['path'] !== 'string') throw new Error('open unavailable')
       return a.kind === 'open' ? fx.openPath(p['path']) : fx.reveal(p['path'])
     }
+    case 'deeplink':
+      if (!fx || typeof p['url'] !== 'string') throw new Error('deep link unavailable')
+      return fx.openDeepLink(p['url'])
     case 'url':
       if (!fx || typeof p['url'] !== 'string') throw new Error('url unavailable')
       return fx.openUrl(p['url'])

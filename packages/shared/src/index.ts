@@ -73,6 +73,8 @@ export interface Effects {
   readClipboard(): Promise<string>
   /** Open a file/folder with the default application. */
   openPath(path: string): Promise<void>
+  /** Open a deep link into one of the user's own apps (lorekeeper://, cipherkeep://, worldloom://, classpad://). */
+  openDeepLink(url: string): Promise<void>
   /** Reveal a file in the system file manager. */
   reveal(path: string): Promise<void>
   /** Put a stored clipboard image (by content hash) back on the clipboard. */

@@ -133,6 +133,7 @@ describe('snippets', () => {
       readClipboard: async () => 'C',
       copyImage: async () => {},
       openPath: async () => {},
+      openDeepLink: async () => {},
       reveal: async () => {},
       bindHotkey: async () => {},
     }

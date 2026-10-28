@@ -15,7 +15,8 @@
     "@beacon/shared": "*",
     "chokidar": "^5.0.0",
     "mathjs": "^14.0.0",
-    "sql.js": "^1.15.2"
+    "sql.js": "^1.15.2",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/sql.js": "^1.4.11"

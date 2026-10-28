@@ -21,5 +21,6 @@ contextBridge.exposeInMainWorld('beacon', {
   reportKeystroke: (commit: number, paint: number) =>
     ipcRenderer.send('perf:keystroke', commit, paint),
   onShown: (cb: (info: { at: number }) => void) => on('shown', cb as never),
+  onSetQuery: (cb: (q: string) => void) => on('set-query', cb as never),
   onSettings: (cb: (s: unknown) => void) => on('settings', cb as never),
 })

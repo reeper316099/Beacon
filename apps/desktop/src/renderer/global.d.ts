@@ -20,6 +20,7 @@ export interface BeaconApi {
   reportShown(t: number): void
   reportKeystroke(commitMs: number, paintMs: number): void
   onShown(cb: (info: { at: number }) => void): () => void
+  onSetQuery(cb: (q: string) => void): () => void
   onSettings(cb: (s: BeaconSettings) => void): () => void
 }
 declare global {

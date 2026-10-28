@@ -8,6 +8,13 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import {
   AliasProvider,
+  HubSetupProvider,
+  HubSourceProvider,
+  cipherkeep,
+  classpad,
+  lorekeeper,
+  worldloom,
+  type IntegrationsFile,
   BookmarksProvider,
   DEFAULT_IGNORE_NAMES,
   FileIndex,
@@ -91,6 +98,7 @@ const effects: Effects = {
   readClipboard: () => effect('readClipboard', null, true),
   copyImage: async (hash) => void (await effect('copyImage', hash)),
   openPath: async (path) => void (await effect('openPath', path)),
+  openDeepLink: async (url) => void (await effect('openDeepLink', url)),
   reveal: async (path) => void (await effect('reveal', path)),
   bindHotkey: async (accelerator, providerId, itemId, title) =>
     void (await effect('bindHotkey', { accelerator, providerId, itemId, title })),
@@ -119,6 +127,14 @@ const todosSchema = z.array(
     done: z.boolean(),
     due: z.string().optional(),
     ts: z.number(),
+  }),
+)
+const integrationsSchema = z.record(
+  z.object({
+    enabled: z.boolean().default(false),
+    dir: z.string().optional(),
+    deepLinks: z.boolean().default(false),
+    showSpoilers: z.boolean().default(false),
   }),
 )
 const pinsSchema = z.array(z.any())
@@ -199,6 +215,36 @@ const dbg = (label: string) => {
   )
 }
 
+/** Empty-state "Launch my apps": whichever of the user's four apps are installed. */
+class MyAppsProvider implements Provider {
+  id = 'myapps'
+  name = 'My apps'
+  mode = 'global' as const
+  constructor(
+    private apps: AppsProvider,
+    private names: Set<string>,
+  ) {}
+  async query(q: ParsedQuery): Promise<ResultItem[]> {
+    if (q.text) return []
+    const out: ResultItem[] = []
+    for (const a of this.apps.byId.values()) {
+      if (!this.names.has(a.name.toLowerCase())) continue
+      const r: ResultItem = {
+        id: a.id,
+        providerId: this.apps.id,
+        title: a.name,
+        subtitle: 'My apps',
+        kind: 'app',
+        score: 50,
+        primary: { id: 'launch', title: 'Open', kind: 'open', payload: null },
+      }
+      if (a.iconPath) r.icon = a.iconPath
+      out.push(r)
+    }
+    return out
+  }
+}
+
 async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Promise<void> {
   dbg('start')
   const store = new JsonFile<FrecencyData>({
@@ -271,6 +317,17 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
   setInterval(() => clip?.prune(), 3_600_000).unref()
   dbg('configs loaded')
   const pins = new PinStore(pinFile)
+
+  // My apps hub: every adapter is off until enabled (via `hub `), read-only, and re-read lazily.
+  const intFile = file<IntegrationsFile>(
+    'config/integrations.json',
+    integrationsSchema as never,
+    () => ({}),
+  )
+  await intFile.load()
+  const adapters = [lorekeeper, cipherkeep, worldloom, classpad]
+  const hubProviders = new Map(adapters.map((a) => [a.id, new HubSourceProvider(a, intFile)]))
+  const MY_APPS = new Set(adapters.map((a) => a.name.toLowerCase()))
 
   // Files: configurable source; the built-in index is crawled in the background, throttled and cancellable.
   const filesCfg = await file<FilesConfig>('config/files.json', filesConfigSchema as never, () =>
@@ -359,6 +416,9 @@ async function main(dataDir: string, cacheDir: string, clipPaused: boolean): Pro
   }
   for (const p of [
     new PinsProvider(pins),
+    new HubSetupProvider(adapters, intFile, hubProviders),
+    ...hubProviders.values(),
+    new MyAppsProvider(apps, MY_APPS),
     new FilesProvider(
       fileIndex,
       () => filesCfg,
