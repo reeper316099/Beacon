@@ -9,7 +9,25 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    # Fail fast, before any installer is built, if the tag and the app version disagree
+    # (installer file names come from package.json, not from the tag).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches package versions
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          for f in package.json apps/desktop/package.json; do
+            have=$(node -p "require('./$f').version")
+            if [ "$have" != "$want" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match $f (version $have). Tag v$have, or bump the version in both package.json files first."
+              exit 1
+            fi
+          done
+
   build:
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -32,10 +50,18 @@ jobs:
       - run: npm test
       - run: npm run icon
       - run: npm run build
-      - run: npx electron-builder ${{ matrix.args }}
+      - name: Package
+        # electron-builder finds the homepage (required for .deb/.rpm) from a .git folder next to
+        # package.json, which this monorepo layout doesn't have; take it from the repo running the job.
+        # --publish never: this job only builds; the release job below publishes.
+        shell: bash
+        run: >
+          npx electron-builder ${{ matrix.args }} --publish never
+          -c.extraMetadata.homepage="$HOMEPAGE"
         working-directory: apps/desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          HOMEPAGE: ${{ github.server_url }}/${{ github.repository }}
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.os }}

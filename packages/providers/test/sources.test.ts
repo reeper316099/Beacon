@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { SearchEngine } from '@beacon/core'
@@ -47,7 +47,8 @@ beforeAll(async () => {
 })
 afterAll(() => rm(dir, { recursive: true, force: true }))
 
-const names = (es: { path: string }[]) => es.map((e) => e.path.slice(dir.length + 1)).sort()
+const names = (es: { path: string }[]) =>
+  es.map((e) => e.path.slice(dir.length + 1).replaceAll(sep, '/')).sort()
 
 describe('crawl', () => {
   const base = () => ({

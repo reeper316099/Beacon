@@ -1,4 +1,4 @@
-import { isAbsolute, normalize } from 'node:path'
+import { isAbsolute } from 'node:path'
 import { z } from 'zod'
 
 export type Permission =
@@ -19,13 +19,17 @@ export function parsePermission(s: string): Permission | null {
   const kind = s.slice(0, i)
   const arg = s.slice(i + 1)
   if (kind === 'fs.read' || kind === 'fs.write') {
+    // A shape check that gives the same answer on every OS (comparing against normalize() would
+    // not: it rewrites "/" to "\" on Windows). Real resolution happens per platform in the Grants.
+    const segs = arg.replace(/[\\/]+$/, '').split(/[\\/]/)
     if (
       !isAbsolute(arg) ||
-      (normalize(arg) !== arg.replace(/[\\/]+$/, '') && normalize(arg) !== arg)
+      segs.includes('..') ||
+      segs.includes('.') ||
+      /[^\\/][\\/]{2,}[^\\/]/.test(arg)
     )
       return null
-    if (arg.split(/[\\/]/).includes('..') || arg === '/' || /^[A-Za-z]:[\\/]?$/.test(arg))
-      return null // never the whole disk
+    if (/^[\\/]+$/.test(arg) || /^[A-Za-z]:[\\/]?$/.test(arg)) return null // never the whole disk
     return { kind, scope: arg.replace(/[\\/]+$/, '') }
   }
   if (kind === 'exec') {

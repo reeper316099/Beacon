@@ -7,7 +7,7 @@ Point Beacon at a folder and every script in it becomes a command. Output stream
 - The default folder is `<dataDir>/scripts`. Add more with `script add /path/to/folder` in the launcher or in `config/scripts.json`
   (`folders`: `[{ "path": "...", "interpreters": {".py": "/opt/venv/bin/python"}, "cwd": "...", "env": ["MY_VAR"], "extraPath": ["/opt/bin"] }]`).
 - Subfolders become groups. Adding, editing or deleting files hot-reloads. `script new py|js|sh|ps1 <name>` scaffolds a template with a header.
-- Recognized: `.py .js .mjs .cjs .ts .sh .bash .zsh .ps1 .bat .cmd .rb .pl`, plus any file with an executable bit and a `#!` line.
+- Recognized: `.py .js .mjs .cjs .ts .sh .bash .zsh .ps1 .bat .cmd .rb .pl`, plus any file with an executable bit and a `#!` line (Windows has no executable bit, so there scripts are recognized by extension only).
   The interpreter is the shebang if present, else your per-extension override, else auto-detected (`python3`/`python`/`py`, `node`,
   `bash`, `zsh`, `pwsh`/`powershell`, `ruby`, `perl`). `.ts` needs `"tsRunner": ["tsx"]`.
 

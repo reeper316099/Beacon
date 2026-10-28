@@ -430,7 +430,9 @@ describe('manager end to end', () => {
   it('discovers scripts: groups, shebang-only files, skips non-scripts and sidecars', () => {
     const titles = entries.map((e) => e.title).sort()
     expect(titles).toContain('Hello')
-    expect(titles).toContain('noext')
+    // Shebang-only files need an executable bit, which Windows doesn't have (see docs/SCRIPTS.md).
+    if (process.platform === 'win32') expect(titles).not.toContain('noext')
+    else expect(titles).toContain('noext')
     expect(titles).not.toContain('plain')
     expect(entries.find((e) => e.title === 'Secret')?.group).toBe('tools')
     expect(find('Hello').id).toBe(scriptId(join(sdir(), 'hello.js')))

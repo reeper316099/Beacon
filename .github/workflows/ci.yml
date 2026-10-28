@@ -56,7 +56,7 @@ jobs:
       - run: npm ci
       - run: npm run icon
       - run: npm run build
-      - run: npx electron-builder ${{ matrix.pack }}
+      - run: npx electron-builder ${{ matrix.pack }} --publish never
         working-directory: apps/desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
